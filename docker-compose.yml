@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # Base de données (PostgreSQL)
   db:
@@ -12,6 +10,11 @@ services:
       - POSTGRES_DB=nba_betting_db
     ports:
       - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nba_user -d nba_betting_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   # Broker de tâches (Redis)
   redis:
@@ -19,27 +22,35 @@ services:
 
   # Backend API (FastAPI)
   backend:
-    build: ./backend
+    build:
+      context: .             # <--- IMPORTANT : On construit depuis la racine
+      dockerfile: backend/Dockerfile
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    restart: always          # <--- IMPORTANT : Relance le container s'il crash (attente DB)
     volumes:
-      - ./backend:/app
-      - ./src:/app/src           # Montage de tes scripts existants
-      - ./daily:/app/daily       # Montage de tes scripts existants
-      - ./data:/app/data         # Persistance des données
-      - ./models:/app/models     # Persistance des modèles IA
+      - ./backend:/app       # Code du backend
+      - ./src:/app/src       # Scripts de calcul partagés
+      - ./daily:/app/daily   # Scripts quotidiens partagés
+      - ./data:/app/data     # Données CSV/JSON
+      - ./models:/app/models # Modèles IA
     ports:
       - "8000:8000"
     environment:
       - DATABASE_URL=postgresql://nba_user:nba_password@db/nba_betting_db
       - CELERY_BROKER_URL=redis://redis:6379/0
     depends_on:
-      - db
-      - redis
+      db:
+        condition: service_healthy # Attend que la DB soit vraiment prête
+      redis:
+        condition: service_started
 
-  # Worker Celery (Exécute les tâches lourdes : Scraping, Training)
+  # Worker Celery
   worker:
-    build: ./backend
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
     command: celery -A celery_worker.celery_app worker --loglevel=info
+    restart: always
     volumes:
       - ./backend:/app
       - ./src:/app/src
@@ -50,13 +61,16 @@ services:
       - DATABASE_URL=postgresql://nba_user:nba_password@db/nba_betting_db
       - CELERY_BROKER_URL=redis://redis:6379/0
     depends_on:
-      - db
+      - backend
       - redis
 
-  # Scheduler Celery Beat (Planifie les tâches 08:00 et 14:00)
+  # Scheduler Celery Beat
   beat:
-    build: ./backend
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
     command: celery -A celery_worker.celery_app beat --loglevel=info
+    restart: always
     volumes:
       - ./backend:/app
     depends_on:
