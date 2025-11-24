@@ -4,37 +4,76 @@ __pycache__/
 *$py.class
 *.so
 .Python
+*.pyc
 
 # Virtual Environment
 venv/
 env/
 ENV/
 .venv
+pip-log.txt
 
 # Claude Code
 .claude/
 
-# IDE
+# IDE & Editors
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
+.DS_Store
 
-# Data files 
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Data files (ne pas versionner les gros fichiers)
 data/raw/*.csv
 data/processed/*.csv
 data/daily/*.json
 data/daily/*.csv
 
-# Models 
+# Models (fichiers lourds)
 models/*.json
 models/*.pkl
 models/*.pth
+models/*.joblib
 
 # Logs
 *.log
+logs/
+celerybeat-schedule
+celerybeat.pid
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Docker volumes
+postgres_data/
+redis_data/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/build/
+frontend/.vite/
+frontend/.cache/
+
+# Tests
+.pytest_cache/
+.coverage
+htmlcov/
+*.cover
 
 # OS
 .DS_Store
 Thumbs.db
+*.bak
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb

@@ -1,10 +1,35 @@
 # Liste des librairies nécessaires pour NBA Betting AI
+
+# Core Data Science
 pandas
 numpy
-nba_api
-tqdm
-xgboost
 scikit-learn
+
+# NBA & Sports Data
+nba_api
+
+# Machine Learning
+xgboost
 joblib
+
+# Web Scraping
 selenium
 webdriver-manager
+
+# Progress Bars
+tqdm
+
+# API Backend
+fastapi
+uvicorn[standard]
+sqlalchemy
+psycopg2-binary
+alembic
+
+# Async Tasks
+celery
+redis
+
+# Utilities
+python-dotenv
+pydantic

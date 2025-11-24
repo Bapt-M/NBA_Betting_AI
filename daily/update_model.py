@@ -2,158 +2,180 @@ import pandas as pd
 import numpy as np
 import os
 import sys
-import json
-from datetime import datetime, timedelta
+from datetime import datetime, date
 
-# Import des modules du dossier src
+# IMPORTS
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from src.data_fetcher import fetch_all_game_data
 from src.data_processor import process_data
 from src.train_xgb import train_xgboost_model
+from backend.database import SessionLocal
+from backend.models import MatchResult, DailyPrediction, ModelPerformance
 
 # Chemins
-PREDICTIONS_CSV = "data/daily/all_odds_predictions.csv"
-PERFORMANCE_LOG = "data/daily/model_history_log.csv"
-TRAIN_DATA = "data/processed/nba_data_train.csv"
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+TRAIN_DATA = os.path.join(BASE_DIR, "data/processed/nba_data_train.csv")
 
-def evaluate_past_predictions():
+def sync_history_to_db(db, df_actual):
     """
-    Compare les prédictions stockées dans le CSV avec les résultats réels
-    récupérés après la mise à jour des données.
+    Copie les données du CSV historique vers la table match_results.
+    C'est utile pour afficher l'historique dans le Dashboard.
     """
-    print("\n--- 2. ÉVALUATION DES PERFORMANCES ---")
+    print("--- Sync Historique DB ---")
+    # On ne synchronise que les matchs récents pour aller vite (ex: 30 derniers jours)
+    # Ou on vérifie s'ils existent déjà via match_id (construit depuis date+teams)
     
-    if not os.path.exists(PREDICTIONS_CSV):
-        print("[ERREUR] Pas de fichier de prédictions trouvé à évaluer.")
-        return
-
-    if not os.path.exists(TRAIN_DATA):
-        print("[ERREUR] Pas de données d'entraînement à jour.")
-        return
-
-    # 1. Charger les prédictions et l'historique réel à jour
-    df_preds = pd.read_csv(PREDICTIONS_CSV)
-    df_actual = pd.read_csv(TRAIN_DATA)
+    count = 0
+    # Pour l'exemple, on prend les 50 derniers matchs du CSV
+    recent_games = df_actual.tail(50)
     
-    # On s'assure d'avoir les mappings d'équipe pour faire la correspondance
-    # On reconstruit le map Code -> ID depuis le fichier d'entrainement
-    if 'TEAM_ABBREVIATION_Home' in df_actual.columns:
-        map_df = df_actual[['TEAM_ABBREVIATION_Home', 'TEAM_ID_Home']].drop_duplicates()
-        code_to_id = dict(zip(map_df.TEAM_ABBREVIATION_Home, map_df.TEAM_ID_Home))
+    for _, row in recent_games.iterrows():
+        # Création d'un ID unique : YYYYMMDD-HOME-AWAY
+        game_date = pd.to_datetime(row['GAME_DATE']).date()
+        match_id = f"{game_date.strftime('%Y%m%d')}-{row['TEAM_ABBREVIATION_Home']}-{row['TEAM_ABBREVIATION_Away']}"
+        
+        exists = db.query(MatchResult).filter(MatchResult.match_id_nba == match_id).first()
+        if not exists:
+            new_match = MatchResult(
+                match_id_nba=match_id,
+                date=game_date,
+                home_team=row['TEAM_ABBREVIATION_Home'],
+                away_team=row['TEAM_ABBREVIATION_Away'],
+                actual_total=float(row['TARGET_Total_Pts'])
+            )
+            db.add(new_match)
+            count += 1
+            
+    db.commit()
+    print(f"✅ {count} nouveaux matchs ajoutés à l'historique DB.")
+
+def evaluate_db_predictions(db, df_actual):
+    """
+    Vérifie les paris en attente dans la table DailyPrediction.
+    """
+    print("--- Évaluation des Paris ---")
+    
+    # Récupérer les prédictions non traitées
+    pending_preds = db.query(DailyPrediction).filter(DailyPrediction.is_processed == False).all()
+    
+    updated_count = 0
+    daily_stats = {"total": 0, "wins": 0, "profit": 0.0}
+    
+    # Mapping rapide pour recherche dans df_actual (plus rapide que loop)
+    # On crée une clé unique Date+Home dans le dataframe
+    df_actual['lookup_key'] = df_actual.apply(
+        lambda x: f"{pd.to_datetime(x['GAME_DATE']).date()}-{x['TEAM_ABBREVIATION_Home']}", axis=1
+    )
+    
+    for pred in pending_preds:
+        # Clé de recherche
+        key = f"{pred.match_date}-{pred.home_team}"
+        
+        # Trouver le match dans le CSV mis à jour
+        match_row = df_actual[df_actual['lookup_key'] == key]
+        
+        if not match_row.empty:
+            real_score = match_row.iloc[0]['TARGET_Total_Pts']
+            
+            # Vérification du pari
+            won = False
+            if pred.bet_type == "OVER" and real_score > pred.fdj_line: won = True
+            elif pred.bet_type == "UNDER" and real_score < pred.fdj_line: won = True
+            
+            # Mise à jour DB
+            # On pourrait lier ça à MatchResult ici, mais restons simples
+            pred.is_processed = True
+            updated_count += 1
+            
+            # Stats du jour
+            daily_stats["total"] += 1
+            if won:
+                daily_stats["wins"] += 1
+                # Profit simulé (cote moyenne ~1.80)
+                daily_stats["profit"] += 0.80 
+            else:
+                daily_stats["profit"] -= 1.00
+                
+            # On met aussi à jour MatchResult si on veut afficher la prédiction à côté du résultat
+            # (Logique à implémenter selon besoin)
+
+    db.commit()
+    print(f"✅ {updated_count} paris vérifiés et mis à jour.")
+    return daily_stats
+
+def update_performance_metrics(db, daily_stats):
+    """Enregistre la performance globale du jour."""
+    if daily_stats["total"] == 0: return
+
+    today = datetime.now().date()
+    
+    # Vérifier si perf existe déjà
+    perf = db.query(ModelPerformance).filter(ModelPerformance.date == today).first()
+    
+    success_rate = daily_stats["wins"] / daily_stats["total"]
+    
+    if perf:
+        perf.total_predictions += daily_stats["total"]
+        perf.correct_predictions += daily_stats["wins"]
+        perf.profit_net += daily_stats["profit"]
+        # Recalcul taux
+        perf.success_rate = perf.correct_predictions / perf.total_predictions
     else:
-        print("[ERREUR] Colonne Abbreviation manquante dans les données.")
-        return
-
-    # Préparation du journal de performance
-    results_list = []
+        new_perf = ModelPerformance(
+            date=today,
+            total_predictions=daily_stats["total"],
+            correct_predictions=daily_stats["wins"],
+            success_rate=success_rate,
+            profit_net=daily_stats["profit"],
+            mae=0.0 # TODO: Calculer la MAE réelle
+        )
+        db.add(new_perf)
     
-    # Pour chaque prédiction faite
-    for index, row in df_preds.iterrows():
-        # Si le match a déjà été évalué (on pourrait ajouter une colonne 'Evaluated' dans le CSV futur), on passe
-        # Ici on recalcule tout pour simplifier
-        
-        home_code = row['Home']
-        away_code = row['Away']
-        pred_date = row['Date'] # Format YYYY-MM-DD
-        
-        # Trouver l'ID des équipes
-        home_id = code_to_id.get(home_code)
-        away_id = code_to_id.get(away_code)
-        
-        if not home_id or not away_id:
-            continue
-            
-        # Chercher ce match dans les données réelles (TRAIN_DATA)
-        # On cherche un match à cette date (ou date +1 jour décalage fuseau horaire) avec ces équipes
-        match_real = df_actual[
-            (df_actual['TEAM_ID_Home'] == home_id) & 
-            (df_actual['TEAM_ID_Away'] == away_id) &
-            (df_actual['GAME_DATE'].astype(str).str.contains(pred_date))
-        ]
-        
-        if match_real.empty:
-            # Le match n'a peut-être pas encore été joué ou récupéré
-            continue
-            
-        # Le match a été joué !
-        real_score = match_real.iloc[0]['TARGET_Total_Pts']
-        
-        # Vérification du Pari
-        bet_type = row['Type_Pari'] # OVER ou UNDER
-        line = row['Ligne_Bookmaker']
-        cote = row['Cote']
-        
-        won = False
-        if bet_type == "OVER" and real_score > line: won = True
-        elif bet_type == "UNDER" and real_score < line: won = True
-        
-        # Calcul Profit (Mise fictive de 1 unité)
-        profit = (cote - 1) if won else -1
-        
-        results_list.append({
-            "Date": pred_date,
-            "Match": row['Match'],
-            "Prediction": row['Prediction_Modele'],
-            "Reel": real_score,
-            "Erreur_Abs": abs(row['Prediction_Modele'] - real_score),
-            "Pari": f"{bet_type} {line}",
-            "Resultat": "GAGNÉ" if won else "PERDU",
-            "Profit": profit
-        })
-
-    if not results_list:
-        print("[ERREUR] Aucun nouveau résultat de match trouvé pour les prédictions existantes.")
-        return
-
-    # Sauvegarde / Mise à jour du Log
-    df_results = pd.DataFrame(results_list)
-    
-    # Affichage du bilan de la session
-    print(f"Matchs évalués : {len(df_results)}")
-    print(f"Taux de réussite : {(df_results['Resultat'] == 'GAGNÉ').mean() * 100:.1f}%")
-    print(f"Profit Net (Mise 1u) : {df_results['Profit'].sum():.2f}u")
-    print(f"Erreur Moyenne Modèle (MAE) : {df_results['Erreur_Abs'].mean():.2f} pts")
-    
-    # Append au fichier historique global
-    header = not os.path.exists(PERFORMANCE_LOG)
-    df_results.to_csv(PERFORMANCE_LOG, mode='a', header=header, index=False)
-    print(f"Historique mis à jour : {PERFORMANCE_LOG}")
-    
-    # Optionnel : Nettoyer le fichier all_odds_predictions pour ne pas réévaluer demain ?
-    # Pour l'instant on garde tout, c'est plus sûr.
+    db.commit()
+    print("✅ Métriques de performance mises à jour.")
 
 def run_update_pipeline():
     print("==================================================")
-    print("   MISE À JOUR QUOTIDIENNE DU MODÈLE NBA")
+    print("   MISE À JOUR & SYNC DB")
     print("==================================================")
     
-    # ÉTAPE 1 : Récupérer les nouveaux matchs (Nuit dernière)
-    print("\n--- 1. TÉLÉCHARGEMENT DES DONNÉES ---")
+    # 1. Fetch & Process Data (CSV)
     try:
-        # On appelle le fetcher existant (qui gère l'historique et la mise à jour)
-        fetch_all_game_data() # Met à jour raw/nba_games_raw.csv
-        process_data()        # Recalcule processed/nba_data_train.csv
+        fetch_all_game_data()
+        process_data()
     except Exception as e:
-        print(f"[ERREUR] Erreur lors de la mise à jour des données : {e}")
+        print(f"❌ Erreur Fetch/Process: {e}")
         return
 
-    # ÉTAPE 2 : Vérifier si on a gagné hier
+    # 2. DB Operations
+    db = SessionLocal()
     try:
-        evaluate_past_predictions()
+        # Recharger le CSV frais
+        if not os.path.exists(TRAIN_DATA):
+            print("❌ CSV non trouvé après update.")
+            return
+        df_actual = pd.read_csv(TRAIN_DATA)
+        
+        # Sync Historique
+        sync_history_to_db(db, df_actual)
+        
+        # Check Paris
+        stats = evaluate_db_predictions(db, df_actual)
+        
+        # Update KPI
+        update_performance_metrics(db, stats)
+        
     except Exception as e:
-        print(f"[ERREUR] Erreur lors de l'évaluation (pas bloquant) : {e}")
+        print(f"❌ Erreur DB Sync: {e}")
+    finally:
+        db.close()
 
-    # ÉTAPE 3 : Ré-entraîner le cerveau (Fine-tuning)
-    print("\n--- 3. RÉ-ENTRAÎNEMENT DU MODÈLE ---")
-    print("Le modèle va apprendre des matchs de la nuit dernière...")
+    # 3. Retrain Model
+    print("\n--- Ré-entraînement ---")
     try:
         train_xgboost_model()
     except Exception as e:
-        print(f"[ERREUR] Erreur lors de l'entraînement : {e}")
-        return
-
-    print("\nMISE À JOUR TERMINÉE AVEC SUCCÈS.")
-    print("Vous pouvez maintenant lancer : python daily/scraper_fdj.py")
+        print(f"❌ Erreur Training: {e}")
 
 if __name__ == "__main__":
     run_update_pipeline()

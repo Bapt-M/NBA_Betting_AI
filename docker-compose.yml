@@ -1,0 +1,66 @@
+version: '3.8'
+
+services:
+  # Base de données (PostgreSQL)
+  db:
+    image: postgres:15
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_USER=nba_user
+      - POSTGRES_PASSWORD=nba_password
+      - POSTGRES_DB=nba_betting_db
+    ports:
+      - "5432:5432"
+
+  # Broker de tâches (Redis)
+  redis:
+    image: redis:7
+
+  # Backend API (FastAPI)
+  backend:
+    build: ./backend
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    volumes:
+      - ./backend:/app
+      - ./src:/app/src           # Montage de tes scripts existants
+      - ./daily:/app/daily       # Montage de tes scripts existants
+      - ./data:/app/data         # Persistance des données
+      - ./models:/app/models     # Persistance des modèles IA
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://nba_user:nba_password@db/nba_betting_db
+      - CELERY_BROKER_URL=redis://redis:6379/0
+    depends_on:
+      - db
+      - redis
+
+  # Worker Celery (Exécute les tâches lourdes : Scraping, Training)
+  worker:
+    build: ./backend
+    command: celery -A celery_worker.celery_app worker --loglevel=info
+    volumes:
+      - ./backend:/app
+      - ./src:/app/src
+      - ./daily:/app/daily
+      - ./data:/app/data
+      - ./models:/app/models
+    environment:
+      - DATABASE_URL=postgresql://nba_user:nba_password@db/nba_betting_db
+      - CELERY_BROKER_URL=redis://redis:6379/0
+    depends_on:
+      - db
+      - redis
+
+  # Scheduler Celery Beat (Planifie les tâches 08:00 et 14:00)
+  beat:
+    build: ./backend
+    command: celery -A celery_worker.celery_app beat --loglevel=info
+    volumes:
+      - ./backend:/app
+    depends_on:
+      - worker
+
+volumes:
+  postgres_data:
