@@ -10,49 +10,92 @@ celery_app = Celery(
     backend=os.environ.get("CELERY_BROKER_URL", "redis://redis:6379/0")
 )
 
-# Configuration du Planning (Schedules)
+# --- ROUTINES AUTOMATIQUES ---
 celery_app.conf.beat_schedule = {
-    # 08:00 : Mise à jour des données et du modèle
-    'morning-update-routine': {
-        'task': 'run_morning_pipeline',
+    'morning-update': {
+        'task': 'full_morning_pipeline',
         'schedule': crontab(hour=8, minute=0),
     },
-    # 14:00 : Récupération des cotes et prédictions
-    'afternoon-prediction-routine': {
-        'task': 'run_afternoon_pipeline',
+    'afternoon-predict': {
+        'task': 'full_afternoon_pipeline',
         'schedule': crontab(hour=14, minute=0),
     },
 }
 
-# --- DÉFINITION DES TÂCHES ---
+# --- TÂCHES UNITAIRES (Pour appel manuel via UI) ---
 
-@celery_app.task(name="run_morning_pipeline")
-def run_morning_pipeline():
-    """Exécute update_model.py : Fetch results -> Eval -> Train"""
-    # Import dynamique pour éviter les erreurs circulaires
+@celery_app.task(name="task_fetch_data")
+def task_fetch_data():
     sys.path.append("/app")
-    from daily.update_model import run_update_pipeline
-    
-    print(">>> Démarrage Pipeline Matin")
-    run_update_pipeline()
-    
-    # TODO: Lire le fichier model_history_log.csv généré et le sauvegarder en BDD (Table ModelPerformance)
-    return "Morning Pipeline Completed"
+    from src.data_fetcher import fetch_all_game_data
+    return fetch_all_game_data()
 
-@celery_app.task(name="run_afternoon_pipeline")
-def run_afternoon_pipeline():
-    """Exécute scraper_fdj.py puis daily_predict.py"""
+@celery_app.task(name="task_process_data")
+def task_process_data():
+    sys.path.append("/app")
+    from src.data_processor import process_data
+    process_data()
+    return "Data processed successfully"
+
+@celery_app.task(name="task_train_model")
+def task_train_model():
+    sys.path.append("/app")
+    from src.train_xgb import train_xgboost_model
+    train_xgboost_model()
+    return "Model trained successfully"
+
+@celery_app.task(name="task_scrape_odds")
+def task_scrape_odds():
     sys.path.append("/app")
     from daily.scraper_fdj import scrape_nba_odds
-    from daily.daily_predict import run_predictions
-    
-    print(">>> Démarrage Pipeline Après-midi")
-    
-    # 1. Scraper les cotes
     scrape_nba_odds()
-    
-    # 2. Générer les prédictions
+    return "Odds scraped"
+
+@celery_app.task(name="task_predict_daily")
+def task_predict_daily():
+    sys.path.append("/app")
+    from daily.daily_predict import run_predictions
     run_predictions()
+    return "Daily predictions generated and saved to DB"
+
+@celery_app.task(name="task_update_history")
+def task_update_history():
+    sys.path.append("/app")
+    from daily.update_model import run_update_pipeline
+    # Note: update_model fait déjà fetch + process + train en interne dans sa version actuelle
+    # On peut soit l'appeler directement, soit appeler juste la partie évaluation
+    from daily.update_model import evaluate_past_predictions, sync_history_to_db, update_performance_metrics
+    from backend.database import SessionLocal
+    import pandas as pd
+    from backend.config import settings
     
-    # TODO: Lire le fichier best_bets.csv généré et le sauvegarder en BDD (Table DailyPrediction)
-    return "Afternoon Pipeline Completed"
+    # Version "Lite" qui ne refait pas tout le fetch/train (car on a des boutons séparés)
+    db = SessionLocal()
+    try:
+        df = pd.read_csv(settings.DATA_PROCESSED)
+        sync_history_to_db(db, df)
+        # Evaluation des paris en DB
+        from daily.update_model import evaluate_db_predictions
+        stats = evaluate_db_predictions(db, df)
+        update_performance_metrics(db, stats)
+    finally:
+        db.close()
+    return "History updated and bets evaluated"
+
+# --- PIPELINES COMPLETS ---
+
+@celery_app.task(name="full_morning_pipeline")
+def full_morning_pipeline():
+    # Chainage : Fetch -> Process -> Update History -> Train
+    task_fetch_data()
+    task_process_data()
+    task_update_history()
+    task_train_model()
+    return "Morning Pipeline Done"
+
+@celery_app.task(name="full_afternoon_pipeline")
+def full_afternoon_pipeline():
+    # Chainage : Scrape -> Predict
+    task_scrape_odds()
+    task_predict_daily()
+    return "Afternoon Pipeline Done"

@@ -51,56 +51,54 @@ def sync_history_to_db(db, df_actual):
 
 def evaluate_db_predictions(db, df_actual):
     """
-    Vérifie les paris en attente dans la table DailyPrediction.
+    Vérifie les paris en attente et met à jour leur statut WIN/LOSS.
     """
-    print("--- Évaluation des Paris ---")
+    print("--- Évaluation des Paris en Base ---")
     
-    # Récupérer les prédictions non traitées
     pending_preds = db.query(DailyPrediction).filter(DailyPrediction.is_processed == False).all()
     
     updated_count = 0
     daily_stats = {"total": 0, "wins": 0, "profit": 0.0}
     
-    # Mapping rapide pour recherche dans df_actual (plus rapide que loop)
-    # On crée une clé unique Date+Home dans le dataframe
+    # Création d'une clé de recherche rapide
     df_actual['lookup_key'] = df_actual.apply(
         lambda x: f"{pd.to_datetime(x['GAME_DATE']).date()}-{x['TEAM_ABBREVIATION_Home']}", axis=1
     )
     
     for pred in pending_preds:
-        # Clé de recherche
         key = f"{pred.match_date}-{pred.home_team}"
-        
-        # Trouver le match dans le CSV mis à jour
         match_row = df_actual[df_actual['lookup_key'] == key]
         
         if not match_row.empty:
             real_score = match_row.iloc[0]['TARGET_Total_Pts']
             
-            # Vérification du pari
+            # Vérification
             won = False
             if pred.bet_type == "OVER" and real_score > pred.fdj_line: won = True
             elif pred.bet_type == "UNDER" and real_score < pred.fdj_line: won = True
             
-            # Mise à jour DB
-            # On pourrait lier ça à MatchResult ici, mais restons simples
+            # Mise à jour de l'objet Prediction
             pred.is_processed = True
+            pred.actual_score = real_score
+            pred.bet_result = "WIN" if won else "LOSS"
+            
+            # Calcul Profit (Hypothèse cote moyenne 1.85 pour l'historique simple, ou récupérer la vraie cote si stockée)
+            # Pour l'instant on simule une cote standard NBA Over/Under de 1.90
+            cote_simu = 1.90 
+            pred.payout = (cote_simu - 1) if won else -1.0
+            
             updated_count += 1
             
-            # Stats du jour
+            # Stats agrégées
             daily_stats["total"] += 1
             if won:
                 daily_stats["wins"] += 1
-                # Profit simulé (cote moyenne ~1.80)
-                daily_stats["profit"] += 0.80 
+                daily_stats["profit"] += (cote_simu - 1)
             else:
-                daily_stats["profit"] -= 1.00
-                
-            # On met aussi à jour MatchResult si on veut afficher la prédiction à côté du résultat
-            # (Logique à implémenter selon besoin)
+                daily_stats["profit"] -= 1.0
 
     db.commit()
-    print(f"✅ {updated_count} paris vérifiés et mis à jour.")
+    print(f"✅ {updated_count} paris mis à jour avec leurs résultats.")
     return daily_stats
 
 def update_performance_metrics(db, daily_stats):

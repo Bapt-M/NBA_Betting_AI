@@ -1,29 +1,37 @@
 from fastapi import APIRouter, HTTPException
-import schemas
-
-# On importe les tâches Celery (Attention à l'import circulaire, on le fait souvent dans la fonction)
-# Pour cet exemple, on suppose que celery_worker est accessible dans le PYTHONPATH
+from pydantic import BaseModel
+# CORRECTION : Import absolu
+from backend import schemas
 
 router = APIRouter(prefix="/tasks", tags=["Tasks"])
 
-@router.post("/trigger/{task_name}", response_model=schemas.TaskTriggerResponse)
-def trigger_task(task_name: str):
-    """
-    Lance manuellement une tâche de fond (Scraping, Entrainement...).
-    """
-    # Import dynamique pour éviter que main.py ne charge tout Celery au démarrage
-    from celery_worker import run_morning_pipeline, run_afternoon_pipeline
+class TaskResponse(BaseModel):
+    task_id: str
+    status: str
+
+@router.post("/trigger/{action}", response_model=TaskResponse)
+def trigger_pipeline(action: str):
+    # CORRECTION : Import depuis backend.celery_worker
+    from backend.celery_worker import (
+        task_fetch_data, task_process_data, task_train_model,
+        task_scrape_odds, task_predict_daily, task_update_history,
+        full_morning_pipeline, full_afternoon_pipeline
+    )
     
-    task = None
-    if task_name == "morning_update":
-        task = run_morning_pipeline.delay()
-    elif task_name == "afternoon_predictions":
-        task = run_afternoon_pipeline.delay()
-    else:
-        raise HTTPException(status_code=404, detail=f"Tâche '{task_name}' inconnue.")
-    
-    return {
-        "status": "started", 
-        "task_id": task.id,
-        "message": f"Tâche {task_name} lancée en arrière-plan."
+    task_map = {
+        "fetch_data": task_fetch_data,
+        "process_data": task_process_data,
+        "train_model": task_train_model,
+        "scrape_odds": task_scrape_odds,
+        "predict_daily": task_predict_daily,
+        "update_history": task_update_history,
+        "full_morning": full_morning_pipeline,
+        "full_afternoon": full_afternoon_pipeline
     }
+    
+    if action not in task_map:
+        raise HTTPException(status_code=404, detail="Action inconnue")
+        
+    task = task_map[action].delay()
+    
+    return {"task_id": task.id, "status": "started"}

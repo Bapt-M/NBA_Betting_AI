@@ -1,16 +1,14 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import func
-import models, schemas
-from database import get_db
+# CORRECTION : Imports absolus
+from backend import models, schemas
+from backend.database import get_db
 
 router = APIRouter(prefix="/analytics", tags=["Analytics"])
 
 @router.get("/roi", response_model=schemas.AnalyticsResponse)
 def get_roi_analytics(db: Session = Depends(get_db)):
-    """
-    Calcule les indicateurs clés de performance (KPIs) et la courbe de profit.
-    """
     perfs = db.query(models.ModelPerformance).order_by(models.ModelPerformance.date.asc()).all()
     
     if not perfs:
@@ -19,16 +17,13 @@ def get_roi_analytics(db: Session = Depends(get_db)):
             "history": []
         }
 
-    # Calcul des agrégats
     total_bets = sum(p.total_predictions for p in perfs)
     total_wins = sum(p.correct_predictions for p in perfs)
     total_profit = sum(p.profit_net for p in perfs)
     
     win_rate = (total_wins / total_bets) if total_bets > 0 else 0
-    # ROI approximatif (Profit / Mise totale estimée à 1u par pari)
     roi = (total_profit / total_bets) * 100 if total_bets > 0 else 0
 
-    # Construction de l'historique cumulatif
     history = []
     running_profit = 0.0
     for p in perfs:

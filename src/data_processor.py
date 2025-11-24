@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 import os
+from backend.config import settings
 
 def calculate_advanced_stats(df):
     """Calcule les métriques avancées pour chaque match."""
@@ -56,6 +57,8 @@ def get_rolling_and_season_stats(df, window=5):
     return pd.concat([df_sorted, rolling, season_avg], axis=1)
 
 def process_data(input_path="data/raw/nba_games_raw.csv", output_path="data/processed/nba_data_train.csv"):
+    input_path = settings.DATA_RAW
+    output_path = settings.DATA_PROCESSED
     print("--- Traitement des Données (Feature Engineering) ---")
     
     if not os.path.exists(input_path):

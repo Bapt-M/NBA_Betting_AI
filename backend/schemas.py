@@ -1,8 +1,10 @@
 from pydantic import BaseModel
 from datetime import datetime, date
-from typing import Optional, List
+from typing import Optional, List, Dict
 
-# --- Match Result Schemas ---
+# ==========================================
+# 1. MATCH RESULTS (Historique)
+# ==========================================
 class MatchResultBase(BaseModel):
     match_id_nba: str
     date: datetime
@@ -22,7 +24,9 @@ class MatchResult(MatchResultBase):
     class Config:
         from_attributes = True
 
-# --- Daily Prediction Schemas ---
+# ==========================================
+# 2. DAILY PREDICTIONS (Pronostics)
+# ==========================================
 class DailyPredictionBase(BaseModel):
     match_date: date
     home_team: str
@@ -32,6 +36,9 @@ class DailyPredictionBase(BaseModel):
     bet_type: str
     confidence_score: float
     recommendation: str
+    bet_result: Optional[str] = None
+    actual_score: Optional[float] = None
+    payout: Optional[float] = 0.0
 
 class DailyPredictionCreate(DailyPredictionBase):
     pass
@@ -44,7 +51,9 @@ class DailyPrediction(DailyPredictionBase):
     class Config:
         from_attributes = True
 
-# --- Performance Analytics Schemas ---
+# ==========================================
+# 3. ANALYTICS (Stats & Graphiques)
+# ==========================================
 class PerformanceSummary(BaseModel):
     total_bets: int
     win_rate: float
@@ -59,7 +68,28 @@ class AnalyticsResponse(BaseModel):
     summary: PerformanceSummary
     history: List[ROIDataPoint]
 
-# --- Task Schemas ---
+# ==========================================
+# 4. SYSTEM STATUS (Monitoring)
+# ==========================================
+class DataStatus(BaseModel):
+    raw_rows: int
+    processed_rows: int
+    last_update: Optional[date] = None
+    is_up_to_date: bool
+
+class ModelStatus(BaseModel):
+    exists: bool
+    last_trained: Optional[datetime] = None
+    mae: float
+
+class SystemStatusResponse(BaseModel):
+    data: DataStatus
+    model: ModelStatus
+    api_status: str
+
+# ==========================================
+# 5. TASKS (Celery)
+# ==========================================
 class TaskTriggerResponse(BaseModel):
     status: str
     task_id: str

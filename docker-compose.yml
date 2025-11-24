@@ -1,5 +1,4 @@
 services:
-  # Base de données (PostgreSQL)
   db:
     image: postgres:15
     volumes:
@@ -16,43 +15,45 @@ services:
       timeout: 5s
       retries: 5
 
-  # Broker de tâches (Redis)
   redis:
     image: redis:7
 
-  # Backend API (FastAPI)
   backend:
     build:
-      context: .             # <--- IMPORTANT : On construit depuis la racine
+      context: .
       dockerfile: backend/Dockerfile
-    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
-    restart: always          # <--- IMPORTANT : Relance le container s'il crash (attente DB)
+    # CORRECTION COMMANDE : backend.main
+    command: uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
+    restart: always
     volumes:
-      - ./backend:/app       # Code du backend
-      - ./src:/app/src       # Scripts de calcul partagés
-      - ./daily:/app/daily   # Scripts quotidiens partagés
-      - ./data:/app/data     # Données CSV/JSON
-      - ./models:/app/models # Modèles IA
+      # CORRECTION VOLUME : On mappe dans /app/backend
+      - ./backend:/app/backend
+      - ./src:/app/src
+      - ./daily:/app/daily
+      - ./data:/app/data
+      - ./models:/app/models
     ports:
       - "8000:8000"
     environment:
       - DATABASE_URL=postgresql://nba_user:nba_password@db/nba_betting_db
       - CELERY_BROKER_URL=redis://redis:6379/0
+      # Ajout du PYTHONPATH pour que Python trouve les modules à la racine
+      - PYTHONPATH=/app
     depends_on:
       db:
-        condition: service_healthy # Attend que la DB soit vraiment prête
+        condition: service_healthy
       redis:
         condition: service_started
 
-  # Worker Celery
   worker:
     build:
       context: .
       dockerfile: backend/Dockerfile
-    command: celery -A celery_worker.celery_app worker --loglevel=info
+    # CORRECTION COMMANDE : backend.celery_worker
+    command: celery -A backend.celery_worker.celery_app worker --loglevel=info
     restart: always
     volumes:
-      - ./backend:/app
+      - ./backend:/app/backend
       - ./src:/app/src
       - ./daily:/app/daily
       - ./data:/app/data
@@ -60,19 +61,22 @@ services:
     environment:
       - DATABASE_URL=postgresql://nba_user:nba_password@db/nba_betting_db
       - CELERY_BROKER_URL=redis://redis:6379/0
+      - PYTHONPATH=/app
     depends_on:
       - backend
       - redis
 
-  # Scheduler Celery Beat
   beat:
     build:
       context: .
       dockerfile: backend/Dockerfile
-    command: celery -A celery_worker.celery_app beat --loglevel=info
+    # CORRECTION COMMANDE : backend.celery_worker
+    command: celery -A backend.celery_worker.celery_app beat --loglevel=info
     restart: always
     volumes:
-      - ./backend:/app
+      - ./backend:/app/backend
+    environment:
+      - PYTHONPATH=/app
     depends_on:
       - worker
 

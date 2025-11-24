@@ -1,28 +1,27 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-import models
-from database import engine
-from routers import predictions, results, analytics, tasks
+# CORRECTION : Imports absolus (backend.xxx)
+from backend import models
+from backend.database import engine
+from backend.routers import predictions, results, analytics, tasks, system
 
-# Création automatique des tables (pour le dev)
 models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="NBA Betting AI Dashboard", version="1.0.0")
 
-# Configuration CORS (pour autoriser le frontend React)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"], # URL du frontend React par défaut
+    allow_origins=["http://localhost:3000", "http://localhost:5173", "http://127.0.0.1:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Enregistrement des routeurs
 app.include_router(predictions.router, prefix="/api")
 app.include_router(results.router, prefix="/api")
 app.include_router(analytics.router, prefix="/api")
 app.include_router(tasks.router, prefix="/api")
+app.include_router(system.router, prefix="/api")
 
 @app.get("/")
 def read_root():

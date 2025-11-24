@@ -4,8 +4,11 @@ import xgboost as xgb
 import joblib
 import os
 from sklearn.metrics import mean_absolute_error
+from backend.config import settings
 
 def train_xgboost_model():
+    data_path = settings.DATA_PROCESSED
+    model_path = settings.MODEL_PATH
     print("--- Entraînement Modèle XGBoost (Expert Betting) ---")
     
     data_path = "data/processed/nba_data_train.csv"
@@ -77,7 +80,7 @@ def train_xgboost_model():
     print(f"\nRÉSULTAT FINAL (MAE) : {mae:.2f} points d'erreur moyenne.")
     
     # 7. Sauvegarde Modèle
-    model.save_model("models/xgb_nba_model.json")
+    model.save_model(model_path)
     print("Modèle sauvegardé dans 'models/xgb_nba_model.json'")
     
     # Sauvegarde d'un extrait de test pour vérification manuelle
