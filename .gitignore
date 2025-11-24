@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv
+
+# Claude Code
+.claude/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Data files 
+data/raw/*.csv
+data/processed/*.csv
+data/daily/*.json
+data/daily/*.csv
+
+# Models 
+models/*.json
+models/*.pkl
+models/*.pth
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db

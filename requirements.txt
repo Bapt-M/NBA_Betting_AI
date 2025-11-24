@@ -1,0 +1,10 @@
+# Liste des librairies nécessaires pour NBA Betting AI
+pandas
+numpy
+nba_api
+tqdm
+xgboost
+scikit-learn
+joblib
+selenium
+webdriver-manager
