@@ -31,7 +31,7 @@ class DailyPrediction(Base):
     bet_type = Column(String)
     
     # AJOUT ICI : La cote réelle du bookmaker
-    odd = Column(Float, default=1.90) 
+    odd = Column(Float, default=1.40) 
     
     confidence_score = Column(Float)
     recommendation = Column(String)

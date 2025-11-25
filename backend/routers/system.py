@@ -1,10 +1,10 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 import os
+import json # AJOUT
 import pandas as pd
 from datetime import datetime, date
 
-# CORRECTION : Imports absolus (backend.xxx)
 from backend.database import get_db
 from backend import models, schemas
 from backend.config import settings
@@ -17,7 +17,6 @@ def get_system_status(db: Session = Depends(get_db)):
     raw_count = 0
     if os.path.exists(settings.DATA_RAW):
         try:
-            # Lecture rapide juste pour compter
             df_raw = pd.read_csv(settings.DATA_RAW, usecols=[0])
             raw_count = len(df_raw)
         except: pass
@@ -41,9 +40,21 @@ def get_system_status(db: Session = Depends(get_db)):
     
     if model_exists:
         last_trained = datetime.fromtimestamp(os.path.getmtime(settings.MODEL_PATH))
-        perf = db.query(models.ModelPerformance).order_by(models.ModelPerformance.date.desc()).first()
-        if perf:
-            model_mae = perf.mae
+        
+        # --- CORRECTION : Lire le fichier model_metrics.json ---
+        metrics_path = os.path.join(os.path.dirname(settings.MODEL_PATH), "model_metrics.json")
+        if os.path.exists(metrics_path):
+            try:
+                with open(metrics_path, "r") as f:
+                    metrics = json.load(f)
+                    model_mae = metrics.get("mae", 0.0)
+            except: pass
+        
+        # Fallback si le fichier JSON n'existe pas (ancienne méthode)
+        if model_mae == 0.0:
+            perf = db.query(models.ModelPerformance).order_by(models.ModelPerformance.date.desc()).first()
+            if perf:
+                model_mae = perf.mae
 
     return {
         "data": {

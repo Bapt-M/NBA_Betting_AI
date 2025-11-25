@@ -67,12 +67,40 @@ KEYWORD_MAPPING = {
 }
 
 def extract_teams_robust(event_text):
-    found_codes = []
-    text_lower = event_text.lower().replace('\n', ' ')
+    """
+    Extrait les codes équipes (ex: 'MIL', 'CHI') d'un texte en respectant l'ordre d'apparition.
+    Gère les doublons (ex: "Milwaukee Bucks" -> 1 seule équipe MIL).
+    """
+    found_matches = [] # Liste de tuples (position_start, code_equipe)
+    text_lower = event_text.lower().replace('\n', ' ').strip()
+    
+    # 1. On cherche TOUS les mots-clés présents dans le texte
     for keyword, code in KEYWORD_MAPPING.items():
-        if re.search(r'\b' + re.escape(keyword) + r'\b', text_lower):
-            if code not in found_codes: found_codes.append(code)
-    if len(found_codes) == 2: return found_codes[0], found_codes[1]
+        # \b assure qu'on cherche le mot entier (évite de trouver 'IND' dans 'Find')
+        # re.escape évite les bugs avec des caractères spéciaux
+        pattern = r'\b' + re.escape(keyword) + r'\b'
+        
+        # finditer trouve toutes les occurrences du mot-clé
+        for match in re.finditer(pattern, text_lower):
+            found_matches.append((match.start(), code))
+    
+    # 2. On trie les résultats par leur position dans la phrase
+    # Cela garantit que l'équipe citée en premier est bien Home
+    found_matches.sort(key=lambda x: x[0])
+    
+    # 3. On dédoublonne en gardant l'ordre
+    final_teams = []
+    seen_codes = set()
+    
+    for _, code in found_matches:
+        if code not in seen_codes:
+            final_teams.append(code)
+            seen_codes.add(code)
+    
+    # 4. On retourne les 2 premières équipes trouvées
+    if len(final_teams) >= 2:
+        return final_teams[0], final_teams[1]
+        
     return None, None
 
 def scrape_match_odds(driver, wait):
