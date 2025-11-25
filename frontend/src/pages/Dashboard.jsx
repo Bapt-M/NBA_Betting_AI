@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import axios from 'axios';
+import { getTeamName } from '../teamMapping';
 
 const Dashboard = () => {
   const [stats, setStats] = useState({ winRate: "0%", avgError: "0 pts", profit: "0 U" });
@@ -9,30 +10,28 @@ const Dashboard = () => {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        // 1. Récupérer les résultats récents
         const resResults = await axios.get('http://localhost:8000/api/results/latest?limit=10');
         setResults(resResults.data);
 
-        // 2. Récupérer les stats globales (Analytics)
         const resStats = await axios.get('http://localhost:8000/api/analytics/roi');
         if (resStats.data.summary) {
           const s = resStats.data.summary;
           setStats({
             winRate: `${s.win_rate}%`,
-            avgError: "+/- 4.5", // À calculer si dispo
+            avgError: "+/- 4.5", 
             profit: `${s.profit_net > 0 ? '+' : ''}${s.profit_net.toFixed(1)} Units`
           });
         }
         setLoading(false);
       } catch (err) {
-        console.error("Erreur chargement dashboard", err);
+        console.error("Erreur dashboard", err);
         setLoading(false);
       }
     };
     fetchData();
   }, []);
 
-  if (loading) return <div className="p-10 text-center text-white">Chargement des données...</div>;
+  if (loading) return <div className="p-10 text-center text-white">Chargement...</div>;
 
   return (
     <div className="flex flex-col gap-6">
@@ -52,24 +51,23 @@ const Dashboard = () => {
               <tr>
                 <th className="px-6 py-3 text-left font-medium uppercase">Date</th>
                 <th className="px-6 py-3 text-left font-medium uppercase">Match</th>
-                <th className="px-6 py-3 text-left font-medium uppercase">Score Réel</th>
-                <th className="px-6 py-3 text-left font-medium uppercase">Total</th>
+                <th className="px-6 py-3 text-left font-medium uppercase">Score Total</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
               {results.map((row) => (
                 <tr key={row.id} className="hover:bg-slate-50 dark:hover:bg-white/5 transition-colors">
                   <td className="px-6 py-4 text-slate-500">{new Date(row.date).toLocaleDateString()}</td>
-                  <td className="px-6 py-4 font-medium dark:text-white">{row.home_team} vs {row.away_team}</td>
-                  <td className="px-6 py-4 text-slate-300 font-mono">{row.actual_total} pts</td>
-                  <td className="px-6 py-4">
-                    {/* Ici on pourrait afficher la prédiction si on faisait le lien dans MatchResult */}
-                    <span className="text-xs text-slate-500">Terminé</span>
+                  <td className="px-6 py-4 font-medium dark:text-white">
+                    {getTeamName(row.home_team)} <span className="text-slate-500">vs</span> {getTeamName(row.away_team)}
+                  </td>
+                  <td className="px-6 py-4 text-slate-300 font-mono font-bold text-lg">
+                    {row.actual_total} pts
                   </td>
                 </tr>
               ))}
               {results.length === 0 && (
-                <tr><td colSpan="4" className="p-6 text-center text-slate-500">Aucun résultat enregistré pour le moment.</td></tr>
+                <tr><td colSpan="3" className="p-6 text-center text-slate-500">Aucun résultat récent.</td></tr>
               )}
             </tbody>
           </table>

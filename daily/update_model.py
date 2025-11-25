@@ -17,21 +17,19 @@ BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 TRAIN_DATA = os.path.join(BASE_DIR, "data/processed/nba_data_train.csv")
 
 def sync_history_to_db(db, df_actual):
-    """
-    Copie les données du CSV historique vers la table match_results.
-    C'est utile pour afficher l'historique dans le Dashboard.
-    """
     print("--- Sync Historique DB ---")
-    # On ne synchronise que les matchs récents pour aller vite (ex: 30 derniers jours)
-    # Ou on vérifie s'ils existent déjà via match_id (construit depuis date+teams)
+    
+    # CORRECTION : On s'assure que le dataframe est trié par date avant de prendre la fin
+    df_actual['GAME_DATE'] = pd.to_datetime(df_actual['GAME_DATE'])
+    df_actual.sort_values('GAME_DATE', inplace=True)
+    
+    # On prend une plage plus large (100 derniers matchs) pour être sûr de tout couvrir
+    recent_games = df_actual.tail(100)
     
     count = 0
-    # Pour l'exemple, on prend les 50 derniers matchs du CSV
-    recent_games = df_actual.tail(50)
-    
     for _, row in recent_games.iterrows():
-        # Création d'un ID unique : YYYYMMDD-HOME-AWAY
-        game_date = pd.to_datetime(row['GAME_DATE']).date()
+        # ... (Reste de la logique d'insertion inchangée) ...
+        game_date = row['GAME_DATE'].date()
         match_id = f"{game_date.strftime('%Y%m%d')}-{row['TEAM_ABBREVIATION_Home']}-{row['TEAM_ABBREVIATION_Away']}"
         
         exists = db.query(MatchResult).filter(MatchResult.match_id_nba == match_id).first()
@@ -72,33 +70,30 @@ def evaluate_db_predictions(db, df_actual):
         if not match_row.empty:
             real_score = match_row.iloc[0]['TARGET_Total_Pts']
             
-            # Vérification
             won = False
             if pred.bet_type == "OVER" and real_score > pred.fdj_line: won = True
             elif pred.bet_type == "UNDER" and real_score < pred.fdj_line: won = True
             
-            # Mise à jour de l'objet Prediction
             pred.is_processed = True
             pred.actual_score = real_score
             pred.bet_result = "WIN" if won else "LOSS"
             
-            # Calcul Profit (Hypothèse cote moyenne 1.85 pour l'historique simple, ou récupérer la vraie cote si stockée)
-            # Pour l'instant on simule une cote standard NBA Over/Under de 1.90
-            cote_simu = 1.90 
-            pred.payout = (cote_simu - 1) if won else -1.0
+            # CORRECTION ICI : Utiliser la cote stockée en base
+            # Si pas de cote (anciennes données), fallback sur 1.90
+            real_odd = pred.odd if pred.odd and pred.odd > 1 else 1.90
+            pred.payout = (real_odd - 1) if won else -1.0
             
             updated_count += 1
             
-            # Stats agrégées
             daily_stats["total"] += 1
             if won:
                 daily_stats["wins"] += 1
-                daily_stats["profit"] += (cote_simu - 1)
+                daily_stats["profit"] += (real_odd - 1)
             else:
                 daily_stats["profit"] -= 1.0
 
     db.commit()
-    print(f"✅ {updated_count} paris mis à jour avec leurs résultats.")
+    print(f"✅ {updated_count} paris mis à jour.")
     return daily_stats
 
 def update_performance_metrics(db, daily_stats):

@@ -12,26 +12,31 @@ class MatchResult(Base):
     home_team = Column(String)
     away_team = Column(String)
     actual_total = Column(Float)
-    # Pour l'historique visuel
     predicted_total = Column(Float, nullable=True)
     betting_line = Column(Float, nullable=True)
-    prediction_correct = Column(Boolean, nullable=True) 
+    prediction_correct = Column(Boolean, nullable=True)
+    performance_score = Column(Integer, nullable=True)
 
 class DailyPrediction(Base):
     __tablename__ = "daily_predictions"
     id = Column(Integer, primary_key=True, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     match_date = Column(Date)
+    
     home_team = Column(String)
     away_team = Column(String)
+    
     model_prediction = Column(Float)
     fdj_line = Column(Float)
     bet_type = Column(String)
+    
+    # AJOUT ICI : La cote réelle du bookmaker
+    odd = Column(Float, default=1.90) 
+    
     confidence_score = Column(Float)
     recommendation = Column(String)
     is_processed = Column(Boolean, default=False)
     
-    # NOUVEAUX CHAMPS
     bet_result = Column(String, nullable=True) 
     actual_score = Column(Float, nullable=True) 
     payout = Column(Float, default=0.0) 

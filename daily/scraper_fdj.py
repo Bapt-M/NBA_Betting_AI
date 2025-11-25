@@ -11,7 +11,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
 
-# --- CONFIGURATION CHEMINS ---
+# --- PATH SETUP ---
 BASE_DIR = "/app" if os.path.exists("/app") else os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.append(BASE_DIR)
 
@@ -23,20 +23,46 @@ except ImportError:
 
 # --- MAPPING MOTS-CLÉS ---
 KEYWORD_MAPPING = {
-    "celtics": "BOS", "boston": "BOS", "nets": "BKN", "brooklyn": "BKN",
-    "knicks": "NYK", "new york": "NYK", "76ers": "PHI", "philadelphia": "PHI",
-    "raptors": "TOR", "toronto": "TOR", "bulls": "CHI", "chicago": "CHI",
-    "cavaliers": "CLE", "cleveland": "CLE", "cavs": "CLE", "pistons": "DET", "detroit": "DET",
-    "pacers": "IND", "indiana": "IND", "bucks": "MIL", "milwaukee": "MIL",
-    "hawks": "ATL", "atlanta": "ATL", "hornets": "CHA", "charlotte": "CHA",
-    "heat": "MIA", "miami": "MIA", "magic": "ORL", "orlando": "ORL",
-    "wizards": "WAS", "washington": "WAS", "nuggets": "DEN", "denver": "DEN",
-    "timberwolves": "MIN", "minnesota": "MIN", "wolves": "MIN", "thunder": "OKC", "oklahoma": "OKC",
-    "blazers": "POR", "portland": "POR", "jazz": "UTA", "utah": "UTA",
-    "warriors": "GSW", "golden state": "GSW", "clippers": "LAC", "lakers": "LAL",
-    "suns": "PHX", "phoenix": "PHX", "kings": "SAC", "sacramento": "SAC",
-    "mavericks": "DAL", "dallas": "DAL", "mavs": "DAL", "rockets": "HOU", "houston": "HOU",
-    "grizzlies": "MEM", "memphis": "MEM", "pelicans": "NOP", "new orleans": "NOP",
+    # ATLANTIC
+    "celtics": "BOS", "boston": "BOS",
+    "nets": "BKN", "brooklyn": "BKN",
+    "knicks": "NYK", "new york": "NYK", "ny knicks": "NYK",
+    "76ers": "PHI", "sixers": "PHI", "philadelphia": "PHI", "philadelphie": "PHI",
+    "raptors": "TOR", "toronto": "TOR",
+
+    # CENTRAL
+    "bulls": "CHI", "chicago": "CHI",
+    "cavaliers": "CLE", "cleveland": "CLE", "cavs": "CLE",
+    "pistons": "DET", "detroit": "DET",
+    "pacers": "IND", "indiana": "IND",
+    "bucks": "MIL", "milwaukee": "MIL",
+
+    # SOUTHEAST
+    "hawks": "ATL", "atlanta": "ATL",
+    "hornets": "CHA", "charlotte": "CHA",
+    "heat": "MIA", "miami": "MIA",
+    "magic": "ORL", "orlando": "ORL",
+    "wizards": "WAS", "washington": "WAS",
+
+    # NORTHWEST
+    "nuggets": "DEN", "denver": "DEN",
+    "timberwolves": "MIN", "minnesota": "MIN", "wolves": "MIN",
+    "thunder": "OKC", "oklahoma": "OKC", "oklahoma city": "OKC", "okc": "OKC",
+    "blazers": "POR", "portland": "POR", "trail blazers": "POR",
+    "jazz": "UTA", "utah": "UTA",
+
+    # PACIFIC
+    "warriors": "GSW", "golden state": "GSW", "golden state warriors": "GSW",
+    "clippers": "LAC", "la clippers": "LAC", "l.a. clippers": "LAC", "los angeles clippers": "LAC",
+    "lakers": "LAL", "la lakers": "LAL", "l.a. lakers": "LAL", "los angeles lakers": "LAL",
+    "suns": "PHX", "phoenix": "PHX",
+    "kings": "SAC", "sacramento": "SAC",
+
+    # SOUTHWEST
+    "mavericks": "DAL", "dallas": "DAL", "mavs": "DAL",
+    "rockets": "HOU", "houston": "HOU",
+    "grizzlies": "MEM", "memphis": "MEM",
+    "pelicans": "NOP", "new orleans": "NOP", "nouvelle orleans": "NOP", "nouvelle-orléans": "NOP",
     "spurs": "SAS", "san antonio": "SAS"
 }
 
@@ -51,114 +77,116 @@ def extract_teams_robust(event_text):
 
 def scrape_match_odds(driver, wait):
     """
-    LOGIQUE D'ORIGINE RESTAURÉE STRICTEMENT
+    Logique avec traces d'exécution (Logs).
     """
     all_fdj_odds = []
+    print("    >  Début analyse page match...")
 
     try:
-        # Cliquer sur le filtre 'Points'
+        # 1. Filtre Points
         try:
+            print("    >  Recherche onglet 'Points'...")
             points_filter = wait.until(
                 EC.element_to_be_clickable((By.XPATH, "//button[contains(@class, 'psel-market-filters__label') and normalize-space(text())='Points']"))
             )
             points_filter.click()
+            print("    >  Clic sur 'Points' effectué.")
             time.sleep(2)
-        except:
-            pass
+        except: 
+            print("    >  (Info) Onglet 'Points' non trouvé ou déjà actif.")
 
-        # Chercher le marché "Plus / Moins Points - Match"
+        # 2. Trouver le marché
+        print("    >  Recherche bloc 'Plus / Moins Points - Match'...")
         market_card = None
         try:
-            # Essai précis avec texte exact
             market_card = wait.until(
                 EC.presence_of_element_located((By.XPATH, "//*[contains(text(), 'Plus / Moins Points - Match')]/ancestor::*[contains(@class, 'psel-market-card') or contains(@class, 'market')]"))
             )
         except:
-            # Fallback recherche manuelle
             all_markets = driver.find_elements(By.CLASS_NAME, 'psel-market-card')
             for market in all_markets:
                 if 'Plus / Moins Points - Match' in market.text:
                     market_card = market
                     break
         
-        if not market_card:
+        if not market_card: 
+            print("    >  [WARN] Marché introuvable.")
             return []
 
-        # Cliquer sur "Afficher plus" s'il existe
+        # 3. Déplier "Afficher plus"
         try:
-            show_more_buttons = market_card.find_elements(By.XPATH, ".//button[contains(@class, 'psel-button--collapse') and normalize-space(text())='Afficher plus']")
-            if show_more_buttons:
-                driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", show_more_buttons[0])
+            show_more = market_card.find_elements(By.XPATH, ".//button[contains(@class, 'psel-button--collapse') and normalize-space(text())='Afficher plus']")
+            if show_more:
+                print("    >  Bouton 'Afficher plus' détecté, clic...")
+                driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", show_more[0])
+                time.sleep(0.5)
+                driver.execute_script("arguments[0].click();", show_more[0])
                 time.sleep(1)
-                driver.execute_script("arguments[0].click();", show_more_buttons[0])
-                time.sleep(1)
-        except:
-            pass
+        except: pass
 
-        # Récupérer les sous-marchés
+        # 4. Analyser les sous-marchés
         sub_markets = market_card.find_elements(By.CLASS_NAME, 'psel-market-card')
         match_total_market = None
-        
-        # Logique de tri des sous-marchés (Match vs Equipes)
+
         if not sub_markets:
-            # Si pas de sous-marché, le conteneur principal est le marché
             match_total_market = market_card
         else:
             for sub_market in sub_markets:
                 try:
                     outcomes_count = len(sub_market.find_elements(By.CLASS_NAME, 'psel-outcome'))
                     text = sub_market.text
-                    # Si beaucoup d'issues (>30) et pas de mention "Equipe", c'est le total match
-                    if outcomes_count > 20 and "Equipe" not in text:
+                    if outcomes_count > 10 and "Equipe" not in text:
                         match_total_market = sub_market
-                        break # On prend le premier gros bloc pertinent
+                        break
                 except: pass
 
-        # Traiter le marché du total du match
+        # 5. Extraction
         if match_total_market:
-            match_odds_elements = match_total_market.find_elements(By.CLASS_NAME, 'psel-outcome')
-            for outcome in match_odds_elements:
+            outcomes = match_total_market.find_elements(By.CLASS_NAME, 'psel-outcome')
+            print(f"    >  Analyse de {len(outcomes)} lignes de cotes...")
+            
+            for outcome in outcomes:
                 try:
                     label = outcome.find_element(By.CLASS_NAME, 'psel-outcome__label').text.strip()
-                    value_str = outcome.find_element(By.CLASS_NAME, 'psel-outcome__data').text.replace(',', '.').strip()
-                    value = float(value_str)
+                    val_str = outcome.find_element(By.CLASS_NAME, 'psel-outcome__data').text.replace(',', '.').strip()
+                    value = float(val_str)
 
-                    # Filtre Cotes
-                    if 1.4 <= value <= 2.4:
+                    if 1.40 <= value <= 2.50:
                         bet_type = None
                         line_str = None
-
-                        if label.startswith('Plus de ') or label.startswith('Plus '):
-                            bet_type = 'OVER'
-                            line_str = label.replace('Plus de ', '').replace('Plus ', '').replace(',', '.').strip()
-                        elif label.startswith('Moins de ') or label.startswith('Moins '):
-                            bet_type = 'UNDER'
-                            line_str = label.replace('Moins de ', '').replace('Moins ', '').replace(',', '.').strip()
                         
+                        if 'Plus' in label:
+                            bet_type = 'OVER'
+                            match = re.search(r'(?:Plus|Moins)(?: de)?\s+([\d,\.]+)', label)
+                            if match: line_str = match.group(1).replace(',', '.')
+                        elif 'Moins' in label:
+                            bet_type = 'UNDER'
+                            match = re.search(r'(?:Plus|Moins)(?: de)?\s+([\d,\.]+)', label)
+                            if match: line_str = match.group(1).replace(',', '.')
+
                         if bet_type and line_str:
                             try:
-                                line = float(line_str)
                                 all_fdj_odds.append({
                                     'odd': value,
                                     'type': bet_type,
-                                    'line': line,
+                                    'line': float(line_str),
                                     'category': 'match_total'
                                 })
                             except: pass
-                except:
-                    continue
+                except: continue
 
-    except Exception as e:
-        print(f"[WARN] Erreur scraping cotes: {e}")
-
+    except Exception as e: 
+        print(f"    >  [ERREUR] {e}")
+        pass
+    
+    print(f"    > [BILAN] {len(all_fdj_odds)} cotes extraites pour ce match.")
     return all_fdj_odds
 
 def scrape_nba_odds():
     URL = "https://www.enligne.parionssport.fdj.fr/paris-basketball/usa/nba"
     OUTPUT_FILE = os.path.join(BASE_DIR, "data/daily/cotes_fdj.json")
     
-    print(f"--- SCRAPING FDJ (Logic Original Restored) ---")
-    
+    print(f"--- SCRAPING FDJ ---")
     options = webdriver.ChromeOptions()
     options.add_argument('--headless')
     options.add_argument('--no-sandbox')
@@ -180,8 +208,7 @@ def scrape_nba_odds():
     try:
         driver.get(URL)
         time.sleep(5)
-        try:
-            wait.until(EC.element_to_be_clickable((By.ID, "popin_tc_privacy_button_2"))).click()
+        try: wait.until(EC.element_to_be_clickable((By.ID, "popin_tc_privacy_button_2"))).click()
         except: pass
 
         events = driver.find_elements(By.CLASS_NAME, 'psel-event')
@@ -195,7 +222,7 @@ def scrape_nba_odds():
             t1, t2 = extract_teams_robust(event.text)
             if not t1: continue
             
-            print(f"Processing: {t1} vs {t2}")
+            print(f"\nTRAITEMENT MATCH {i+1}: {t1} vs {t2}")
             
             driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", event)
             time.sleep(1)
@@ -204,27 +231,17 @@ def scrape_nba_odds():
             time.sleep(3)
             
             odds = scrape_match_odds(driver, wait)
-            
             if odds:
-                final_data.append({
-                    "home": t1, "away": t2,
-                    "date": datetime.now().strftime('%Y-%m-%d'),
-                    "odds": odds
-                })
-                print(f" -> {len(odds)} cotes 'Match Total' récupérées.")
-            else:
-                print(" -> Pas de cotes 'Match Total'.")
+                final_data.append({ "home": t1, "away": t2, "date": datetime.now().strftime('%Y-%m-%d'), "odds": odds })
             
             driver.back()
             time.sleep(2)
-            try:
-                wait.until(EC.presence_of_element_located((By.CLASS_NAME, 'psel-event')))
-            except:
+            try: wait.until(EC.presence_of_element_located((By.CLASS_NAME, 'psel-event')))
+            except: 
                 driver.get(URL)
                 time.sleep(3)
 
-    except Exception as e:
-        print(f"[ERREUR] {e}")
+    except Exception as e: print(f"[ERREUR] {e}")
     finally:
         os.makedirs(os.path.dirname(OUTPUT_FILE), exist_ok=True)
         with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:

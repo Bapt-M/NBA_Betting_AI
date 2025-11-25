@@ -1,10 +1,8 @@
 from pydantic import BaseModel
 from datetime import datetime, date
-from typing import Optional, List, Dict
+from typing import Optional, List
 
-# ==========================================
-# 1. MATCH RESULTS (Historique)
-# ==========================================
+# --- Match Result ---
 class MatchResultBase(BaseModel):
     match_id_nba: str
     date: datetime
@@ -16,17 +14,12 @@ class MatchResultBase(BaseModel):
     prediction_correct: Optional[bool] = None
     performance_score: Optional[int] = None
 
-class MatchResultCreate(MatchResultBase):
-    pass
-
+class MatchResultCreate(MatchResultBase): pass
 class MatchResult(MatchResultBase):
     id: int
-    class Config:
-        from_attributes = True
+    class Config: from_attributes = True
 
-# ==========================================
-# 2. DAILY PREDICTIONS (Pronostics)
-# ==========================================
+# --- Daily Prediction ---
 class DailyPredictionBase(BaseModel):
     match_date: date
     home_team: str
@@ -34,32 +27,30 @@ class DailyPredictionBase(BaseModel):
     model_prediction: float
     fdj_line: float
     bet_type: str
+    
+    # AJOUT CRITIQUE : La cote
+    odd: float = 1.90 
+    
     confidence_score: float
     recommendation: str
     bet_result: Optional[str] = None
     actual_score: Optional[float] = None
     payout: Optional[float] = 0.0
 
-class DailyPredictionCreate(DailyPredictionBase):
-    pass
-
+class DailyPredictionCreate(DailyPredictionBase): pass
 class DailyPrediction(DailyPredictionBase):
     id: int
     created_at: datetime
     is_processed: bool
-    
-    class Config:
-        from_attributes = True
+    class Config: from_attributes = True
 
-# ==========================================
-# 3. ANALYTICS (Stats & Graphiques)
-# ==========================================
+# --- Analytics ---
 class PerformanceSummary(BaseModel):
     total_bets: int
     win_rate: float
     roi: float
     profit_net: float
-    
+
 class ROIDataPoint(BaseModel):
     date: date
     cumulative_profit: float
@@ -68,9 +59,7 @@ class AnalyticsResponse(BaseModel):
     summary: PerformanceSummary
     history: List[ROIDataPoint]
 
-# ==========================================
-# 4. SYSTEM STATUS (Monitoring)
-# ==========================================
+# --- System ---
 class DataStatus(BaseModel):
     raw_rows: int
     processed_rows: int
@@ -87,9 +76,7 @@ class SystemStatusResponse(BaseModel):
     model: ModelStatus
     api_status: str
 
-# ==========================================
-# 5. TASKS (Celery)
-# ==========================================
+# --- Tasks ---
 class TaskTriggerResponse(BaseModel):
     status: str
     task_id: str

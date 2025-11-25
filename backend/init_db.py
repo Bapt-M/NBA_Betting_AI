@@ -1,62 +1,61 @@
 import pandas as pd
 import os
 import sys
+from sqlalchemy import text
+# Assurez-vous que l'import fonctionne dans votre env Docker
 from database import SessionLocal, engine
 from models import Base, MatchResult
-
-# Création des tables
-Base.metadata.create_all(bind=engine)
+from config import settings
 
 def init_historical_data():
-    print("--- Initialisation Historique DB ---")
+    print("--- Initialisation Historique DB (Nettoyage) ---")
     
-    # DÉTECTION INTELLIGENTE DU CHEMIN
-    # Si on est dans Docker (/app existe), le chemin est /app/data...
-    # Sinon (local), on remonte d'un cran depuis le dossier du script.
-    if os.path.exists("/app"):
-        BASE_DIR = "/app"
-    else:
-        BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-        
-    csv_path = os.path.join(BASE_DIR, "data/processed/nba_data_train.csv")
-    print(f"Recherche du fichier : {csv_path}")
-    
+    csv_path = settings.DATA_PROCESSED
     if not os.path.exists(csv_path):
-        print(f"❌ ERREUR : Fichier introuvable : {csv_path}")
-        print("Assurez-vous d'avoir lancé 'python src/data_processor.py' en local avant de lancer Docker,")
-        print("ou que le volume docker est bien monté.")
+        print(f"❌ Fichier introuvable : {csv_path}")
         return
 
     df = pd.read_csv(csv_path)
+    # TRI CRITIQUE : On veut les matchs les plus récents à la fin pour le .tail()
+    df['GAME_DATE'] = pd.to_datetime(df['GAME_DATE'])
+    df.sort_values('GAME_DATE', inplace=True)
+    
     db = SessionLocal()
     
-    print(f"Fichier trouvé. Importation de {len(df)} lignes...")
-    
-    count = 0
-    # On importe tout ou une partie
-    for _, row in df.iterrows():
-        try:
-            game_date = pd.to_datetime(row['GAME_DATE']).date()
-            # ID unique : DATE-HOME-AWAY
-            match_id = f"{game_date.strftime('%Y%m%d')}-{row['TEAM_ABBREVIATION_Home']}-{row['TEAM_ABBREVIATION_Away']}"
-            
-            exists = db.query(MatchResult).filter(MatchResult.match_id_nba == match_id).first()
-            if not exists:
+    try:
+        # 1. VIDER LA TABLE (Pour supprimer les doublons erronés)
+        print("Nettoyage de la table match_results...")
+        db.execute(text("TRUNCATE TABLE match_results RESTART IDENTITY;"))
+        db.commit()
+        
+        # 2. IMPORTER
+        print(f"Importation de {len(df)} matchs...")
+        # On importe tout l'historique (ou ajustez .tail(1000))
+        # Pour éviter de saturer, on peut prendre les 2 dernières saisons (~2500 matchs)
+        subset = df.tail(2500)
+        
+        for _, row in subset.iterrows():
+            try:
+                match_id = f"{row['GAME_DATE'].date().strftime('%Y%m%d')}-{row['TEAM_ABBREVIATION_Home']}-{row['TEAM_ABBREVIATION_Away']}"
+                
                 match = MatchResult(
                     match_id_nba=match_id,
-                    date=game_date,
+                    date=row['GAME_DATE'],
                     home_team=row['TEAM_ABBREVIATION_Home'],
                     away_team=row['TEAM_ABBREVIATION_Away'],
                     actual_total=float(row['TARGET_Total_Pts'])
                 )
                 db.add(match)
-                count += 1
-        except Exception:
-            continue
+            except: continue
             
-    db.commit()
-    db.close()
-    print(f"✅ Succès : {count} nouveaux matchs importés en base.")
+        db.commit()
+        print(f"✅ Succès : {len(subset)} matchs importés.")
+        
+    except Exception as e:
+        print(f"❌ Erreur : {e}")
+        db.rollback()
+    finally:
+        db.close()
 
 if __name__ == "__main__":
     init_historical_data()

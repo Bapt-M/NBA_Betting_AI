@@ -60,26 +60,39 @@ def task_predict_daily():
 
 @celery_app.task(name="task_update_history")
 def task_update_history():
+    """Met à jour l'historique des matchs et évalue les paris en base."""
     sys.path.append("/app")
-    from daily.update_model import run_update_pipeline
-    # Note: update_model fait déjà fetch + process + train en interne dans sa version actuelle
-    # On peut soit l'appeler directement, soit appeler juste la partie évaluation
-    from daily.update_model import evaluate_past_predictions, sync_history_to_db, update_performance_metrics
-    from backend.database import SessionLocal
-    import pandas as pd
-    from backend.config import settings
     
-    # Version "Lite" qui ne refait pas tout le fetch/train (car on a des boutons séparés)
+    # CORRECTION ICI : Import des nouvelles fonctions DB
+    from daily.update_model import sync_history_to_db, update_performance_metrics, evaluate_db_predictions
+    from backend.database import SessionLocal
+    from backend.config import settings
+    import pandas as pd
+    import os
+    
+    if not os.path.exists(settings.DATA_PROCESSED):
+        return "Error: Processed data file not found. Run process_data first."
+
     db = SessionLocal()
     try:
+        # 1. Charger les nouvelles données traitées
         df = pd.read_csv(settings.DATA_PROCESSED)
+        
+        # 2. Synchroniser l'historique visuel (MatchResult)
         sync_history_to_db(db, df)
-        # Evaluation des paris en DB
-        from daily.update_model import evaluate_db_predictions
+        
+        # 3. Évaluer les paris (DailyPrediction -> WIN/LOSS)
         stats = evaluate_db_predictions(db, df)
+        
+        # 4. Mettre à jour les stats globales (ModelPerformance)
         update_performance_metrics(db, stats)
+        
+    except Exception as e:
+        print(f"Error in update history task: {e}")
+        raise e
     finally:
         db.close()
+        
     return "History updated and bets evaluated"
 
 # --- PIPELINES COMPLETS ---
