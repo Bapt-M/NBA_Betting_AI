@@ -15,6 +15,7 @@ joblib
 # Web Scraping
 selenium
 webdriver-manager
+beautifulsoup4
 
 # Progress Bars
 tqdm

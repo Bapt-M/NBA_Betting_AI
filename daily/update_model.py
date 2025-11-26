@@ -8,7 +8,6 @@ from datetime import datetime, date
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from src.data_fetcher import fetch_all_game_data
 from src.data_processor import process_data
-from src.train_xgb import train_xgboost_model
 from backend.database import SessionLocal
 from backend.models import MatchResult, DailyPrediction, ModelPerformance
 from backend.config import settings
@@ -21,6 +20,10 @@ def sync_history_to_db(db, df_actual):
     
     count = 0
     # On prend une plage large pour être sûr
+    if df_actual.empty:
+        print("DataFrame vide, pas de sync.")
+        return
+
     recent_games = df_actual.tail(100)
     
     for _, row in recent_games.iterrows():
@@ -47,12 +50,14 @@ def sync_history_to_db(db, df_actual):
 
 def inject_test_predictions_into_db(db):
     """
-    Met à jour l'historique avec les prédictions du modèle (Test Set)
+    Met à jour l'historique avec les prédictions du modèle (Test Set).
+    Nécessite que train_xgb.py ait généré le fichier 'latest_test_predictions.csv'.
     """
     print("--- Injection des Prédictions de Test en DB ---")
     pred_path = os.path.join(settings.BASE_DIR, "data/processed/latest_test_predictions.csv")
     
     if not os.path.exists(pred_path):
+        print("(Info) Pas de fichier de prédictions de test trouvé. Ignore.")
         return
 
     df_preds = pd.read_csv(pred_path)
@@ -92,7 +97,7 @@ def evaluate_db_predictions(db, df_actual=None):
         # Format: YYYYMMDD-HOME-AWAY
         match_id = f"{pred.match_date.strftime('%Y%m%d')}-{pred.home_team}-{pred.away_team}"
         
-        # On cherche le résultat dans la DB directement
+        # On cherche le résultat dans la DB directement (remplie par sync_history_to_db juste avant)
         match_res = db.query(MatchResult).filter(MatchResult.match_id_nba == match_id).first()
         
         if match_res:
@@ -108,20 +113,25 @@ def evaluate_db_predictions(db, df_actual=None):
             pred.actual_score = real_score
             pred.bet_result = "WIN" if won else "LOSS"
             
-            # Simulation Profit (Cote fixée à 1.90 si inconnue, ou utiliser une vraie cote si dispo)
-            # Ici on utilise 1.90 par défaut comme dans l'ancien code
-            cote = 1.90
-            pred.payout = (cote - 1) if won else -1.0
+            # --- CORRECTION MAJEURE : UTILISATION DE LA VRAIE COTE ---
+            # Si la cote est stockée (ex: 1.85), on l'utilise. Sinon 1.90 par défaut.
+            real_odd = pred.odd if (pred.odd and pred.odd > 1.0) else 1.90
+            
+            if won:
+                profit = real_odd - 1.0
+            else:
+                profit = -1.0
+                
+            pred.payout = profit
+            # ---------------------------------------------------------
             
             updated_count += 1
             
             # Stats pour le rapport du jour
             daily_stats["total"] += 1
+            daily_stats["profit"] += profit
             if won:
                 daily_stats["wins"] += 1
-                daily_stats["profit"] += (cote - 1)
-            else:
-                daily_stats["profit"] -= 1.0
 
     db.commit()
     print(f"✅ {updated_count} paris mis à jour depuis la table MatchResult.")
@@ -134,7 +144,6 @@ def update_performance_metrics(db, daily_stats):
     today = datetime.now().date()
     perf = db.query(ModelPerformance).filter(ModelPerformance.date == today).first()
     
-    # Calcul simple pour l'exemple (à affiner si on lance plusieurs fois par jour)
     success_rate = daily_stats["wins"] / daily_stats["total"]
     
     if perf:
@@ -149,7 +158,7 @@ def update_performance_metrics(db, daily_stats):
             correct_predictions=daily_stats["wins"],
             success_rate=success_rate,
             profit_net=daily_stats["profit"],
-            mae=0.0
+            mae=0.0 # Le MAE est calculé lors de l'entraînement, pas ici
         )
         db.add(new_perf)
     
@@ -161,34 +170,39 @@ def run_update_pipeline():
     print("   MISE À JOUR & SYNC DB")
     print("==================================================")
     
-    # 1. Fetch & Process (Si possible)
+    # 1. Chargement données réelles (Data Processed doit être à jour via data_processor)
     try:
-        if os.path.exists(settings.DATA_RAW):
-             # On tente de charger le CSV s'il existe pour sync_history
+        if os.path.exists(settings.DATA_PROCESSED):
             df_actual = pd.read_csv(settings.DATA_PROCESSED)
         else:
-            df_actual = pd.DataFrame() # Vide
-    except Exception:
+            df_actual = pd.DataFrame()
+            print("[WARN] Fichier processed introuvable. Sync historique impossible.")
+    except Exception as e:
+        print(f"[WARN] Erreur lecture CSV: {e}")
         df_actual = pd.DataFrame()
 
     # 2. DB Operations
     db = SessionLocal()
     try:
-        # Si le CSV est valide, on sync l'historique (utile pour les nouveaux vrais matchs)
+        # A. Sync les vrais résultats (Score réel)
         if not df_actual.empty:
             sync_history_to_db(db, df_actual)
         
-        # Injection des prédictions de test (si le fichier existe)
-        inject_test_predictions_into_db(db)
+        # B. Évaluation des paris en attente (C'est ici que l'argent se calcule)
+        # On passe df_actual mais la fonction utilise surtout la DB MatchResult
+        stats = evaluate_db_predictions(db, df_actual)
         
-        # Évaluation des paris (Source DB)
-        stats = evaluate_db_predictions(db, df_actual) # df_actual n'est plus utilisé mais gardé en paramètre optionnel
-        
-        # Update KPI
+        # C. Update KPI Dashboard
         update_performance_metrics(db, stats)
+        
+        # D. (Optionnel) Injection historique Test si dispo
+        inject_test_predictions_into_db(db)
         
     except Exception as e:
         print(f"❌ Erreur DB Sync: {e}")
+        # On log l'erreur complète pour débug
+        import traceback
+        traceback.print_exc()
     finally:
         db.close()
 

@@ -22,7 +22,7 @@ const Layout = () => {
           <div className="flex items-center gap-9">
             <Link to="/" className={`text-sm font-medium leading-normal ${isActive('/')}`}>Dashboard</Link>
             <Link to="/daily-bets" className={`text-sm font-medium leading-normal ${isActive('/daily-bets')}`}>Daily Bets</Link>
-            <Link to="/analytics" className={`text-sm font-medium leading-normal ${isActive('/analytics')}`}>Analytics</Link>
+            <Link to="/simulation" className={`text-sm font-medium leading-normal ${isActive('/simulation')}`}>Simulation</Link>
             <Link to="/settings" className={`text-sm font-medium leading-normal ${isActive('/settings')}`}>Settings</Link>
           </div>
         </div>

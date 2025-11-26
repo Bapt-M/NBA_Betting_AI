@@ -4,7 +4,7 @@ import Layout from './components/Layout';
 import Dashboard from './pages/Dashboard';
 import DailyBets from './pages/DailyBets';
 import Settings from './pages/Settings';
-import Analytics from './pages/Analytics';
+import Simulation from './pages/Simulation';
 
 function App() {
   return (
@@ -14,7 +14,7 @@ function App() {
         <Route path="daily-bets" element={<DailyBets />} />
         {/* Nouvelle route ajoutée ici */}
         <Route path="settings" element={<Settings />} />
-        <Route path="analytics" element={<Analytics />} />
+        <Route path="simulation" element={<Simulation />} />
       </Route>
     </Routes>
   );

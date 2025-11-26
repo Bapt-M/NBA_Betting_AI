@@ -4,20 +4,18 @@ import xgboost as xgb
 import joblib
 import os
 import sys
-import json  # AJOUT
-from datetime import datetime # AJOUT
-from sklearn.metrics import mean_absolute_error
+import json
+from datetime import datetime
+from sklearn.metrics import mean_absolute_error, accuracy_score
 
 # Ajout path pour import backend config
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from backend.config import settings
 
 def train_xgboost_model():
-    print("--- Entraînement Modèle XGBoost (Expert Betting) ---")
+    print("--- Entraînement Modèle Hybride (Régression + Classification) ---")
     
-    # Utilisation du chemin configuré
     data_path = settings.DATA_PROCESSED
-    model_path = settings.MODEL_PATH
     
     if not os.path.exists(data_path):
         print("Erreur: Dataset introuvable. Lancez data_processor.py d'abord.")
@@ -28,35 +26,39 @@ def train_xgboost_model():
     print(f"Données chargées : {len(df)} matchs.")
     
     # 2. Préparation
-    meta_cols = ['GAME_DATE', 'TEAM_ABBREVIATION_Home', 'TEAM_ABBREVIATION_Away', 'TARGET_Total_Pts']
-    df_meta = df[meta_cols].copy()
-
     df_numeric = df.select_dtypes(include=[np.number])
     cols_to_drop = [
         'GAME_ID_Home', 'GAME_ID_Away', 'TEAM_ID_Home', 'TEAM_ID_Away',
         'TARGET_Total_Pts', 
         'Rest_Days_Home', 'Rest_Days_Away'
     ]
-    X = df_numeric.drop(columns=[c for c in cols_to_drop if c in df_numeric.columns], errors='ignore')
-    y = df['TARGET_Total_Pts']
     
-    # Sauvegarde des noms de colonnes
+    X = df_numeric.drop(columns=[c for c in cols_to_drop if c in df_numeric.columns], errors='ignore')
+    y_reg = df['TARGET_Total_Pts']
+    
+    # Cible Classification : Est-ce que le match dépasse 220 points ? (Médiane NBA approx)
+    # L'idéal serait d'avoir la ligne historique du bookmaker, mais 220 est un bon pivot statistique.
+    y_class = (df['TARGET_Total_Pts'] > 220.5).astype(int)
+    
+    # Sauvegarde Feature Names
     feature_names = X.columns.tolist()
     os.makedirs(os.path.dirname(settings.FEATURE_NAMES), exist_ok=True)
     joblib.dump(feature_names, settings.FEATURE_NAMES)
     
-    # 3. Split Temporel (85% train, 15% test)
+    # 3. Split Temporel
     split_idx = int(len(df) * 0.85)
     
     X_train, X_test = X.iloc[:split_idx], X.iloc[split_idx:]
-    y_train, y_test = y.iloc[:split_idx], y.iloc[split_idx:]
+    y_reg_train, y_reg_test = y_reg.iloc[:split_idx], y_reg.iloc[split_idx:]
+    y_class_train, y_class_test = y_class.iloc[:split_idx], y_class.iloc[split_idx:]
     
     print(f"Train set: {len(X_train)} | Test set: {len(X_test)}")
     
-    # 4. Configuration & Entraînement
-    model = xgb.XGBRegressor(
+    # --- A. MODELE REGRESSION (Score Exact) ---
+    print("\n[1/2] Entraînement Régresseur...")
+    regressor = xgb.XGBRegressor(
         objective='reg:absoluteerror',
-        n_estimators=2000,
+        n_estimators=2500, # Augmenté
         learning_rate=0.005,
         max_depth=6,
         subsample=0.7,
@@ -66,35 +68,58 @@ def train_xgboost_model():
         tree_method='hist'
     )
     
-    model.fit(
-        X_train, y_train,
-        eval_set=[(X_train, y_train), (X_test, y_test)],
+    regressor.fit(
+        X_train, y_reg_train,
+        eval_set=[(X_test, y_reg_test)],
         verbose=False 
     )
     
-    # 5. Prédictions et Évaluation
-    preds = model.predict(X_test)
-    mae = mean_absolute_error(y_test, preds)
-    print(f"\nRÉSULTAT FINAL (MAE) : {mae:.2f} points d'erreur moyenne.")
+    preds_reg = regressor.predict(X_test)
+    mae = mean_absolute_error(y_reg_test, preds_reg)
+    print(f"MAE Régression : {mae:.2f} points")
     
-    model.save_model(model_path)
-    print("Modèle sauvegardé.")
+    regressor.save_model(settings.MODEL_PATH)
+    print("Modèle Régression sauvegardé.")
 
-    # --- CORRECTION MAE : Sauvegarde des métriques dans un JSON ---
+    # --- B. MODELE CLASSIFICATION (Probabilité Over/Under) ---
+    print("\n[2/2] Entraînement Classifieur...")
+    classifier = xgb.XGBClassifier(
+        objective='binary:logistic',
+        n_estimators=1000,
+        learning_rate=0.01,
+        max_depth=5,
+        subsample=0.8,
+        eval_metric='logloss',
+        early_stopping_rounds=50,
+        n_jobs=-1
+    )
+    
+    classifier.fit(
+        X_train, y_class_train,
+        eval_set=[(X_test, y_class_test)],
+        verbose=False
+    )
+    
+    preds_class = classifier.predict(X_test)
+    acc = accuracy_score(y_class_test, preds_class)
+    print(f"Précision Classification (>220.5) : {acc*100:.1f}%")
+    
+    # Sauvegarde Classifier (nom différent)
+    clf_path = settings.MODEL_PATH.replace(".json", "_classifier.json")
+    classifier.save_model(clf_path)
+    print("Modèle Classification sauvegardé.")
+
+    # --- Métriques & Sauvegarde ---
     metrics = {
         "mae": float(mae),
+        "accuracy": float(acc),
         "last_trained": datetime.now().isoformat()
     }
-    metrics_path = os.path.join(os.path.dirname(model_path), "model_metrics.json")
+    metrics_path = os.path.join(os.path.dirname(settings.MODEL_PATH), "model_metrics.json")
     with open(metrics_path, "w") as f:
         json.dump(metrics, f)
-    print(f"✅ Métriques (MAE={mae:.2f}) sauvegardées dans {metrics_path}")
 
-    # Sauvegarde des prédictions de test (pour l'update DB)
-    meta_test = df_meta.iloc[split_idx:].copy()
-    meta_test['Predicted_Total'] = preds
-    output_test_path = os.path.join(settings.BASE_DIR, "data/processed/latest_test_predictions.csv")
-    meta_test.to_csv(output_test_path, index=False)
+    print(f"\n✅ Terminé. MAE={mae:.2f} | Acc={acc*100:.1f}%")
 
 if __name__ == "__main__":
     train_xgboost_model()

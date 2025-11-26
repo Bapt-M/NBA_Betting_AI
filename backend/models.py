@@ -36,6 +36,7 @@ class DailyPrediction(Base):
     confidence_score = Column(Float)
     recommendation = Column(String)
     is_processed = Column(Boolean, default=False)
+    is_ignored = Column(Boolean, default=False)
     
     bet_result = Column(String, nullable=True) 
     actual_score = Column(Float, nullable=True) 

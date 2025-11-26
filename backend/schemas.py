@@ -42,6 +42,7 @@ class DailyPrediction(DailyPredictionBase):
     id: int
     created_at: datetime
     is_processed: bool
+    is_ignored: bool = False
     class Config: from_attributes = True
 
 # --- Analytics ---
@@ -81,3 +82,10 @@ class TaskTriggerResponse(BaseModel):
     status: str
     task_id: str
     message: str
+    
+class BestBetToggle(BaseModel):
+    match_date: str
+    home_team: str
+    away_team: str
+    bet_type: str
+    line: float

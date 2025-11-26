@@ -13,11 +13,52 @@ const DailyBets = () => {
       .catch(err => console.error(err));
   }, []);
 
-  const filtered = predictions.filter(p => {
-    if (showBestBetsOnly && !p.is_best_bet) return false;
-    if (p.Confiance_Score < minConfidence) return false;
-    return true;
-  });
+  // Fonction pour changer le Best Bet manuellement
+  const toggleBestBet = async (bet) => {
+    try {
+      // 1. Appel Backend pour persister le changement (JSON + DB)
+      await axios.put('http://localhost:8000/api/predictions/toggle_best_bet', {
+        match_date: bet.Date,
+        home_team: bet.Home,
+        away_team: bet.Away,
+        bet_type: bet.Type_Pari,
+        line: bet.Ligne_Bookmaker
+      });
+
+      // 2. Mise à jour locale immédiate (Optimistic UI)
+      const updatedPredictions = predictions.map(p => {
+        // On cherche les paris du MÊME match
+        if (p.Date === bet.Date && p.Home === bet.Home && p.Away === bet.Away) {
+            // Si c'est le pari cliqué -> on inverse son statut
+            if (p.Type_Pari === bet.Type_Pari && p.Ligne_Bookmaker === bet.Ligne_Bookmaker) {
+                return { ...p, is_best_bet: !p.is_best_bet };
+            }
+            // Si c'est un autre pari du même match -> on l'éteint (Règle: 1 seul Best Bet par match)
+            return { ...p, is_best_bet: false };
+        }
+        return p;
+      });
+      
+      setPredictions(updatedPredictions);
+
+    } catch (error) {
+      console.error("Erreur lors du changement de Best Bet", error);
+      alert("Impossible de modifier le Best Bet (Erreur Backend)");
+    }
+  };
+
+  const filtered = predictions
+    .filter(p => {
+      if (showBestBetsOnly && !p.is_best_bet) return false;
+      if (p.Confiance_Score < minConfidence) return false;
+      return true;
+    })
+    .sort((a, b) => {
+      if (a.Match !== b.Match) {
+        return a.Match.localeCompare(b.Match);
+      }
+      return b.Confiance_Score - a.Confiance_Score;
+    });
 
   return (
     <div className="flex flex-col gap-6 p-4">
@@ -60,7 +101,6 @@ const DailyBets = () => {
             <tr>
               <th className="px-4 py-3">Date</th>
               <th className="px-4 py-3">Match</th>
-              {/* Colonnes Home/Away fusionnées ou élargies */}
               <th className="px-4 py-3">Home</th>
               <th className="px-4 py-3">Away</th>
               <th className="px-4 py-3 text-right">Pred. Modele</th>
@@ -69,6 +109,7 @@ const DailyBets = () => {
               <th className="px-4 py-3 text-right">Cote</th>
               <th className="px-4 py-3 text-right">Ecart</th>
               <th className="px-4 py-3 text-right">Confiance</th>
+              <th className="px-4 py-3 text-center">Best Bet</th> {/* Nouvelle Colonne */}
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-200 dark:divide-slate-800 text-slate-900 dark:text-white font-mono">
@@ -77,7 +118,6 @@ const DailyBets = () => {
                 <td className="px-4 py-3 text-slate-500">{row.Date}</td>
                 <td className="px-4 py-3 font-bold">{row.Match}</td>
                 
-                {/* MODIFICATION ICI : Utilisation de getTeamName */}
                 <td className="px-4 py-3 text-slate-700 dark:text-slate-300">{getTeamName(row.Home)}</td>
                 <td className="px-4 py-3 text-slate-700 dark:text-slate-300">{getTeamName(row.Away)}</td>
                 
@@ -92,6 +132,8 @@ const DailyBets = () => {
                 </td>
                 <td className="px-4 py-3 text-right">{row.Cote}</td>
                 <td className="px-4 py-3 text-right font-bold">{row.Ecart}</td>
+                
+                {/* Confiance */}
                 <td className="px-4 py-3 text-right">
                   <div className="flex items-center justify-end gap-2">
                     <div className="w-16 h-1.5 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
@@ -101,13 +143,30 @@ const DailyBets = () => {
                         ></div>
                     </div>
                     <span className="w-8 text-right">{row.Confiance_Score}</span>
-                    {row.is_best_bet && <span className="text-yellow-500 text-xs">★</span>}
                   </div>
                 </td>
+
+                {/* BOUTON BEST BET MANUEL */}
+                <td className="px-4 py-3 text-center">
+                    <button 
+                        onClick={() => toggleBestBet(row)}
+                        className={`p-2 rounded-full transition-all ${
+                            row.is_best_bet 
+                            ? 'text-yellow-400 hover:bg-yellow-400/10 scale-110' 
+                            : 'text-slate-600 dark:text-slate-500 hover:text-yellow-400 hover:bg-white/5'
+                        }`}
+                        title={row.is_best_bet ? "Retirer des Best Bets" : "Définir comme Best Bet"}
+                    >
+                        <span className="material-symbols-outlined text-xl">
+                            {row.is_best_bet ? 'star' : 'star_border'}
+                        </span>
+                    </button>
+                </td>
+
               </tr>
             ))}
             {filtered.length === 0 && (
-                <tr><td colSpan="10" className="p-8 text-center text-slate-500 italic">Aucun pari ne correspond à vos critères.</td></tr>
+                <tr><td colSpan="11" className="p-8 text-center text-slate-500 italic">Aucun pari ne correspond à vos critères.</td></tr>
             )}
           </tbody>
         </table>

@@ -3,6 +3,8 @@ import os
 import json
 import time
 import re
+import requests
+from bs4 import BeautifulSoup
 from datetime import datetime
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -17,9 +19,13 @@ sys.path.append(BASE_DIR)
 
 try:
     from src.utils import get_team_code
+    from backend.config import settings
 except ImportError:
     sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
     from src.utils import get_team_code
+    class MockSettings:
+        BASE_DIR = BASE_DIR
+    settings = MockSettings()
 
 # --- MAPPING MOTS-CLÉS ---
 KEYWORD_MAPPING = {
@@ -46,9 +52,10 @@ KEYWORD_MAPPING = {
 
     # NORTHWEST
     "nuggets": "DEN", "denver": "DEN",
-    "timberwolves": "MIN", "minnesota": "MIN", "wolves": "MIN",
+    # --- MODIFICATION ICI : AJOUT DE TWOLVES ---
+    "timberwolves": "MIN", "minnesota": "MIN", "wolves": "MIN", "twolves": "MIN", "min twolves": "MIN",
     "thunder": "OKC", "oklahoma": "OKC", "oklahoma city": "OKC", "okc": "OKC",
-    "blazers": "POR", "portland": "POR", "trail blazers": "POR",
+    "blazers": "POR", "portland": "POR", "trail blazers": "POR", "tblazers": "POR", "por tblazers": "POR",
     "jazz": "UTA", "utah": "UTA",
 
     # PACIFIC
@@ -63,68 +70,133 @@ KEYWORD_MAPPING = {
     "rockets": "HOU", "houston": "HOU",
     "grizzlies": "MEM", "memphis": "MEM",
     "pelicans": "NOP", "new orleans": "NOP", "nouvelle orleans": "NOP", "nouvelle-orléans": "NOP",
-    "spurs": "SAS", "san antonio": "SAS"
+    "spurs": "SAS", "san antonio": "SAS", "sa spurs": "SAS"
 }
 
+def scrape_espn_injuries():
+    """
+    Scrape la page blessures d'ESPN.
+    """
+    url = "https://www.espn.com/nba/injuries"
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    }
+    
+    print("--- Scraping Injuries (ESPN) ---")
+    try:
+        response = requests.get(url, headers=headers)
+        if response.status_code != 200:
+            print(f"Erreur HTTP: {response.status_code}")
+            return {}
+
+        soup = BeautifulSoup(response.content, 'html.parser')
+        injury_data = {}
+        
+        columns = soup.find_all('div', class_='ResponsiveTable')
+        
+        for col in columns:
+            title_div = col.find('div', class_='Table__Title')
+            if not title_div: continue
+            
+            team_name = title_div.text.strip()
+            code = get_team_code(team_name)
+            
+            if not code: continue
+                
+            injury_data[code] = []
+            
+            rows = col.find_all('tr', class_='Table__TR')
+            for row in rows:
+                cols = row.find_all('td')
+                if len(cols) >= 4:
+                    player_name = cols[0].text.strip()
+                    status = cols[2].text.strip()
+                    note = cols[3].text.strip()
+                    
+                    injury_data[code].append({
+                        "name": player_name,
+                        "status": status,
+                        "note": note
+                    })
+
+        output_path = os.path.join(settings.BASE_DIR, "data/daily/injuries.json")
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        with open(output_path, 'w') as f:
+            json.dump(injury_data, f, indent=4)
+            
+        print(f"✅ Blessures récupérées pour {len(injury_data)} équipes.")
+        return injury_data
+
+    except Exception as e:
+        print(f"❌ Erreur Scraper Blessures: {e}")
+        return {}
+
 def extract_teams_robust(event_text):
-    """
-    Extrait les codes équipes (ex: 'MIL', 'CHI') d'un texte en respectant l'ordre d'apparition.
-    Gère les doublons (ex: "Milwaukee Bucks" -> 1 seule équipe MIL).
-    """
-    found_matches = [] # Liste de tuples (position_start, code_equipe)
+    found_matches = []
     text_lower = event_text.lower().replace('\n', ' ').strip()
     
-    # 1. On cherche TOUS les mots-clés présents dans le texte
     for keyword, code in KEYWORD_MAPPING.items():
-        # \b assure qu'on cherche le mot entier (évite de trouver 'IND' dans 'Find')
-        # re.escape évite les bugs avec des caractères spéciaux
         pattern = r'\b' + re.escape(keyword) + r'\b'
-        
-        # finditer trouve toutes les occurrences du mot-clé
         for match in re.finditer(pattern, text_lower):
             found_matches.append((match.start(), code))
     
-    # 2. On trie les résultats par leur position dans la phrase
-    # Cela garantit que l'équipe citée en premier est bien Home
     found_matches.sort(key=lambda x: x[0])
     
-    # 3. On dédoublonne en gardant l'ordre
     final_teams = []
     seen_codes = set()
-    
     for _, code in found_matches:
         if code not in seen_codes:
             final_teams.append(code)
             seen_codes.add(code)
     
-    # 4. On retourne les 2 premières équipes trouvées
     if len(final_teams) >= 2:
         return final_teams[0], final_teams[1]
-        
     return None, None
 
 def scrape_match_odds(driver, wait):
-    """
-    Logique avec traces d'exécution (Logs).
-    """
     all_fdj_odds = []
     print("    >  Début analyse page match...")
+
+    # --- VERIFICATION DATE/HEURE (psel-timer) ---
+    try:
+        timer_element = driver.find_element(By.CLASS_NAME, 'psel-timer')
+        timer_text = timer_element.text.lower().strip()
+        print(f"    >  ✅ Date et heure trouvées : '{timer_text}'")
+
+        # 1. Cas "Demain"
+        if 'demain' in timer_text:
+            match_hour = re.search(r'(\d{1,2})[h:]', timer_text)
+            if match_hour:
+                hour = int(match_hour.group(1))
+                # Si le match est demain après 15h00, c'est la nuit suivante -> SKIP
+                if hour >= 15:
+                    print(f"    >  [SKIP] Match ignoré car prévu demain soir à {hour}h.")
+                    return []
+        
+        # 2. Cas "Aujourd'hui" ou "À XXhXX" (sous-entendu aujourd'hui)
+        elif 'aujourd\'hui' in timer_text or timer_text.startswith('à '):
+            pass # On garde le match
+            
+        # 3. Tout autre cas (ex: "Jeudi", "Vendredi 28", etc.) -> SKIP
+        else:
+            print(f"    >  [SKIP] Match ignoré car date lointaine ou différente : '{timer_text}'")
+            return []
+
+    except Exception as e:
+        print(f"    >  [WARN] Impossible de lire l'horaire (psel-timer) : {e}")
 
     try:
         # 1. Filtre Points
         try:
-            print("    >  Recherche onglet 'Points'...")
             points_filter = wait.until(
                 EC.element_to_be_clickable((By.XPATH, "//button[contains(@class, 'psel-market-filters__label') and normalize-space(text())='Points']"))
             )
             points_filter.click()
-            print("    >  Clic sur 'Points' effectué.")
             time.sleep(2)
         except: 
-            print("    >  (Info) Onglet 'Points' non trouvé ou déjà actif.")
+            pass # Onglet peut-être déjà actif
 
         # 2. Trouver le marché
-        print("    >  Recherche bloc 'Plus / Moins Points - Match'...")
         market_card = None
         try:
             market_card = wait.until(
@@ -138,14 +210,13 @@ def scrape_match_odds(driver, wait):
                     break
         
         if not market_card: 
-            print("    >  [WARN] Marché introuvable.")
+            print("    >  [WARN] Marché 'Plus / Moins Points - Match' introuvable.")
             return []
 
         # 3. Déplier "Afficher plus"
         try:
             show_more = market_card.find_elements(By.XPATH, ".//button[contains(@class, 'psel-button--collapse') and normalize-space(text())='Afficher plus']")
             if show_more:
-                print("    >  Bouton 'Afficher plus' détecté, clic...")
                 driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", show_more[0])
                 time.sleep(0.5)
                 driver.execute_script("arguments[0].click();", show_more[0])
@@ -171,7 +242,6 @@ def scrape_match_odds(driver, wait):
         # 5. Extraction
         if match_total_market:
             outcomes = match_total_market.find_elements(By.CLASS_NAME, 'psel-outcome')
-            print(f"    >  Analyse de {len(outcomes)} lignes de cotes...")
             
             for outcome in outcomes:
                 try:
@@ -179,7 +249,7 @@ def scrape_match_odds(driver, wait):
                     val_str = outcome.find_element(By.CLASS_NAME, 'psel-outcome__data').text.replace(',', '.').strip()
                     value = float(val_str)
 
-                    if 1.40 <= value <= 2.50:
+                    if 1.30 <= value <= 2.50:
                         bet_type = None
                         line_str = None
                         
@@ -193,24 +263,25 @@ def scrape_match_odds(driver, wait):
                             if match: line_str = match.group(1).replace(',', '.')
 
                         if bet_type and line_str:
-                            try:
-                                all_fdj_odds.append({
-                                    'odd': value,
-                                    'type': bet_type,
-                                    'line': float(line_str),
-                                    'category': 'match_total'
-                                })
-                            except: pass
+                            all_fdj_odds.append({
+                                'odd': value,
+                                'type': bet_type,
+                                'line': float(line_str),
+                                'category': 'match_total'
+                            })
                 except: continue
 
     except Exception as e: 
-        print(f"    >  [ERREUR] {e}")
+        print(f"    >  [ERREUR Extraction] {e}")
         pass
     
     print(f"    > [BILAN] {len(all_fdj_odds)} cotes extraites pour ce match.")
     return all_fdj_odds
 
 def scrape_nba_odds():
+    # --- ROUTINE INJURIES INTEGREE ---
+    scrape_espn_injuries()
+    
     URL = "https://www.enligne.parionssport.fdj.fr/paris-basketball/usa/nba"
     OUTPUT_FILE = os.path.join(BASE_DIR, "data/daily/cotes_fdj.json")
     
@@ -240,7 +311,7 @@ def scrape_nba_odds():
         except: pass
 
         events = driver.find_elements(By.CLASS_NAME, 'psel-event')
-        print(f"[INFO] {len(events)} matchs détectés.")
+        print(f"[INFO] {len(events)} matchs détectés sur la page.")
 
         for i in range(len(events)):
             events = driver.find_elements(By.CLASS_NAME, 'psel-event')
@@ -269,7 +340,7 @@ def scrape_nba_odds():
                 driver.get(URL)
                 time.sleep(3)
 
-    except Exception as e: print(f"[ERREUR] {e}")
+    except Exception as e: print(f"[ERREUR GLOBALE] {e}")
     finally:
         os.makedirs(os.path.dirname(OUTPUT_FILE), exist_ok=True)
         with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
